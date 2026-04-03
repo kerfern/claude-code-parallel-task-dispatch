@@ -1,42 +1,117 @@
 ---
 name: parallel-task-dispatch
-description: Use when you have a task list file with 2+ tasks to implement in parallel. Each agent runs a full 6-step lifecycle (analyze issue, red-team plan, implement, test, report bookkeeping, report for commit). Orchestrator handles dependency graphs, file ownership, merge/reconcile, task file updates, and commit+push. Auto-detects git worktree vs config mode. Triggers on "run tasks in parallel", "dispatch task list", "work through issues list". Not for single tasks.
+description: Use when you have a task list file with 2+ tasks to implement in parallel. Each agent runs a full 6-step lifecycle (analyze issue, red-team plan, implement, test, report bookkeeping, report for commit). Orchestrator handles dependency graphs, file ownership, model routing, merge/reconcile, task file updates, and commit+push. Supports claims-based work stealing, team presets, eval-first gates, risk scoring, session persistence, and saga rollback. Auto-detects git worktree vs config mode. Triggers on "run tasks in parallel", "dispatch task list", "work through issues list". Not for single tasks.
 ---
 
 # Parallel Task Dispatch
 
 ## Architecture
 
-Two layers — **orchestrator** (you) and **agents** (dispatched subagents):
+Three layers — **orchestrator** (you), **agents** (per-task), and **coordination** (MCP-backed):
 
 ```
 ORCHESTRATOR (shared state)          AGENTS (per-task, isolated)
 ================================     ================================
 0. Pre-flight — clean tree,          1. Analyze — read issue, check
-   commit + push                        depends/blocks, verify facts
-A. Parse task file                   2. Red team — challenge own plan,
+   commit + push, resume session        depends/blocks, verify facts
+A. Parse task file + risk score      2. Red team — challenge own plan,
 B. Build dependency graph               verify files exist, check
-C. Assign file ownership                assumptions before coding
+C. Assign file ownership + model        assumptions before coding
 D. Dispatch parallel batches    →    3. Implement — write code/config
-E. Merge/validate results     ←     4. Test — run relevant tests
-F. Bookkeep task file                5. Report — structured output
-G. Commit + push                        for orchestrator steps E-G
+D½. Monitor + rebalance        ↔     4. Test — eval-first gates
+E. Merge/validate results     ←     5. Report — structured output
+F. Bookkeep task file + learn           for orchestrator steps E-G
+G. Commit + push + persist
+
+         COORDINATION (MCP-backed, optional)
+         ====================================
+         Claims — work-stealing queue
+         Hive-mind — shared memory + consensus
+         Model routing — sonnet/opus
+         Progress — real-time tracking
+         Learning — SONA trajectories
 ```
 
 **Steps 1-5 are per-agent.** Each agent runs the full lifecycle autonomously in its worktree/context. The orchestrator never implements — it coordinates.
 
-Two execution modes — auto-detected:
+### Execution Modes (auto-detected)
 
 | Mode | When | Isolation | Rollback |
 |------|------|-----------|----------|
 | **Git** | Target files in a git repo | `isolation: "worktree"` | `git tag` + `git reset` |
 | **Config** | Files outside git (`~/.claude/`) | File ownership only | Timestamped backups |
 
+### Capability Layers
+
+The skill has a **core layer** (always active) and **enhancement layers** (activated when
+MCP tools are available or task complexity warrants them). Never skip core for enhancements.
+
+| Layer | Steps | Requires | Default |
+|-------|-------|----------|---------|
+| **Core** | 0-G + Agent 1-5 | Claude Code Task tool | Always on |
+| **Model routing** | C, D | — | On (built into agent params) |
+| **Risk scoring** | A, C | — | On (keyword heuristic) |
+| **Eval-first gates** | Agent 4 | — | On (tests before + after) |
+| **Claims & rebalance** | D½ | `mcp__claude-flow__claims_*` | Off — activate for 6+ agents |
+| **Progress tracking** | D½ | `mcp__claude-flow__progress_*` | Off — activate for 3+ batches |
+| **Hive-mind shared memory** | D, E | `mcp__claude-flow__hive-mind_*` | Off — activate for cross-agent state |
+| **Session persistence** | 0, G | `mcp__claude-flow__session_*` | Off — activate for multi-hour runs |
+| **Learning loop** | F, G | `mcp__claude-flow__hooks_intelligence_*` | Off — activate to improve future routing |
+
 ---
 
-## Orchestrator Step 0 — PRE-FLIGHT (clean tree + push)
+## Team Presets
 
-**Why:** Worktrees are created from the committed branch state. Uncommitted changes are invisible to agents and will cause merge conflicts when their work comes back. This step ensures every agent starts from the same clean baseline.
+For common task shapes, use a preset instead of building from scratch. Presets set
+agent types, model tiers, and team composition automatically.
+
+| Preset | Agents | Topology | When to Use |
+|--------|--------|----------|-------------|
+| **feature** | 1 lead + 2-3 implementers | hierarchical | Multi-file feature implementation |
+| **review** | 3-5 parallel reviewers | flat | Security + performance + architecture audit |
+| **debug** | 3 parallel debuggers | flat (ACH) | Complex bug with multiple hypotheses |
+| **fullstack** | frontend + backend + API + test | hierarchical | Cross-layer feature |
+| **migration** | 2 implementers + 1 reviewer | pipeline | Framework upgrade, API version bump |
+| **research** | 3-5 Explore agents | flat | Investigation, audit, data analysis |
+
+**To use a preset**, add `preset: feature` (or similar) to your dispatch invocation.
+The orchestrator fills in agent types, model tiers, and file ownership rules per the table.
+You can override any field.
+
+### Preset Details
+
+**Feature team:**
+- Lead (sonnet): orchestrates, owns interface contracts + shared types
+- Implementers (sonnet): one per vertical slice, worktree-isolated
+- Test agent (sonnet): writes tests for interfaces between slices
+
+**Review team:**
+- Each reviewer (sonnet) gets one dimension: security, performance, architecture, correctness, trading-safety
+- All run in parallel, no worktree needed (read-only)
+- Reports merged into unified review with severity ratings
+
+**Debug team (ACH — Analysis of Competing Hypotheses):**
+- Each debugger (sonnet) investigates one hypothesis
+- Evidence is confidence-weighted: high >80%, medium 50-80%, low <50%
+- All cite file:line; orchestrator arbitrates based on evidence weight
+
+**Research team:**
+- All Explore agents (sonnet)
+- No file ownership — all read-only, no worktree
+- Results synthesized by orchestrator
+
+---
+
+## Orchestrator Step 0 — PRE-FLIGHT
+
+**Why:** Worktrees are created from the committed branch state. Uncommitted changes are invisible to agents and will cause merge conflicts when their work comes back.
+
+**Session resume check (if session persistence enabled):**
+```
+If mcp__claude-flow__session_* available:
+  Check for saved dispatch session → offer to resume from last checkpoint
+  If resuming: skip to the batch that was in progress, re-dispatch incomplete tasks
+```
 
 **Run these checks in parallel:**
 
@@ -59,14 +134,14 @@ git diff --stat                       # unstaged changes?
 - NEVER auto-push — always confirm with the user first
 - If the user says "commit and push", do both then re-verify clean state
 - If there are untracked files the user doesn't want to commit, that's fine — only tracked modifications matter for worktree correctness
-- Config mode (files outside git) skips this step entirely
+- Config mode (files outside git) skips git checks entirely
 
 **After clean state confirmed**, record the baseline:
 ```bash
 git rev-parse HEAD   # save as DISPATCH_BASE_SHA for rollback reference
 ```
 
-## Orchestrator Step A — PARSE
+## Orchestrator Step A — PARSE + RISK SCORE
 
 Read the task list file. Extract per task:
 
@@ -77,6 +152,18 @@ Read the task list file. Extract per task:
 | Priority | `P0/P1/P2`, `priority: high/med/low` | Order within batch |
 | Status | `[x]`, `DONE`, `CLOSED` | Skip |
 
+**Risk scoring (per task):**
+
+Assign a risk tier based on task content. This drives model selection and review gates.
+
+| Risk Tier | Keywords / Signals | Model | Review Gate |
+|-----------|-------------------|-------|-------------|
+| **Critical** | "auth", "payment", "credential", "secret", "trading", "order", "financial" | opus or sonnet | Mandatory security-reviewer post-merge |
+| **High** | "migration", "schema", "delete", "remove", "refactor", "breaking" | sonnet | Full test suite + diff review |
+| **Standard** | Implementation, feature, bugfix | sonnet | Standard batch gate |
+| **Low** | "docs", "comment", "readme", "typo", "config" | sonnet | Minimal — ownership check only |
+| **Research** | "investigate", "audit", "analyze", "measure", "benchmark" | sonnet (Explore agent) | No merge — report only |
+
 ## Orchestrator Step B — DEPENDENCY GRAPH
 
 - Topological sort tasks into parallel batches
@@ -84,18 +171,25 @@ Read the task list file. Extract per task:
 - Batch 2: depends on Batch 1 results (run after Batch 1 merges)
 - Circular dependencies: if topological sort fails, show cycle to user ("Tasks #A -> #B -> #C -> #A"), ask which edge to remove, re-sort, verify. If user declines, abort.
 
-## Orchestrator Step C — FILE OWNERSHIP
+**Critical-path highlight:** Identify the longest dependency chain. Show it in the execution
+plan so the user knows which tasks are on the critical path (delay = overall delay).
+
+## Orchestrator Step C — FILE OWNERSHIP + MODEL ROUTING
 
 Per task, identify target files (from description or grep/glob). Build ownership matrix — one owner per file. Present execution plan:
 
 ```
 EXECUTION PLAN
 ==============
-Batch 1 (parallel): #1, #3
-Batch 2 (after #1):  #2 (depends on #1)
+Batch 1 (parallel): #1[sonnet], #3[sonnet], #5[sonnet/explore]
+Batch 2 (after #1):  #2[sonnet] (depends on #1)
 
-| # | Task | Batch | Owned Files | Read-Only |
-|---|------|-------|-------------|-----------|
+| # | Task | Batch | Risk | Model | Agent Type | Owned Files | Read-Only |
+|---|------|-------|------|-------|------------|-------------|-----------|
+| 1 | Add auth | 1 | Critical | sonnet | general | src/auth.py | src/config.py |
+| 3 | Fix typo | 1 | Low | sonnet | general | docs/api.md | — |
+| 5 | Audit perf | 1 | Research | sonnet | Explore | — (read-only) | src/**/*.py |
+| 2 | Rate limit | 2 | High | sonnet | general | src/middleware.py | src/auth.py |
 ```
 
 **Overlap detection:** If a file appears in 2+ tasks within the same batch, assign to higher-priority task; other gets read-only. If both MUST write, split into sequential batches.
@@ -108,6 +202,19 @@ other number."). Check current version: `grep -c '_migrate_' storage.py` or equi
 **Research-only agents:** Tasks that only need code reading (audits, investigations,
 data queries) should be dispatched WITHOUT `isolation: "worktree"`. This avoids base
 drift entirely and runs faster. Only use worktree isolation for agents that modify files.
+
+**Model routing rules:**
+
+| Agent Role | Default Model | Override When |
+|-----------|--------------|---------------|
+| Implementation (write code) | `model: "sonnet"` | Critical risk → omit (use default opus/sonnet) |
+| Research / read-only | `model: "sonnet"` | — |
+| Review / security audit | `model: "sonnet"` | — |
+| Test writing | `model: "sonnet"` | — |
+| Documentation | `model: "sonnet"` | — |
+
+Sonnet is the default for all agent roles. Use opus only when explicitly needed for
+complex architectural reasoning or security-critical code review.
 
 **User approves before dispatch.**
 
@@ -122,6 +229,7 @@ Agent(
   description="Task N: {summary}",
   prompt=AGENT_LIFECYCLE_PROMPT,
   isolation="worktree",
+  model="{risk-based model from Step C}",
   run_in_background=true
 )
 ```
@@ -132,6 +240,7 @@ Agent(
 Agent(
   description="Task N: {summary}",
   prompt=AGENT_LIFECYCLE_PROMPT,
+  model="{risk-based model from Step C}",
   run_in_background=true
 )
 ```
@@ -159,7 +268,47 @@ ALWAYS prefix subsequent commands with `cd /path/to/main/tree &&` to avoid runni
 git commands in the wrong worktree. This is especially dangerous during Step E when
 running `git diff` or `git status` — you may see the worktree's state instead of main's.
 
-**Rate limits:** For 8+ parallel agents, stagger launches with 2-3s delays. Use `model: "sonnet"` for read-only agents to reduce pressure. If project uses SQLite or local DB, ensure worktree hooks redirect the DB path to an isolated copy (see `worktree-db-redirect.js`).
+**Rate limits:** For 8+ parallel agents, stagger launches with 2-3s delays. If project uses SQLite or local DB, ensure worktree hooks redirect the DB path to an isolated copy (see `worktree-db-redirect.js`).
+
+---
+
+## Orchestrator Step D½ — MONITOR + REBALANCE (optional)
+
+**When to activate:** 6+ agents dispatched, or batch expected to take >5 minutes,
+or claims MCP tools are available.
+
+This step runs WHILE agents are working. It does NOT block agent execution.
+
+**Without MCP (lightweight):**
+- Track which agents have returned vs. still running
+- If an agent returns `status: blocked`, note it for Step E
+- If an agent returns much faster than others, it's idle — note for future batch sizing
+
+**With claims MCP (`mcp__claude-flow__claims_*`):**
+```
+Per agent at dispatch time:
+  claims_claim(issueId=task_id, agentId=agent_name, agentType=agent_type)
+
+When agent returns early (fast completion):
+  claims_release(issueId=task_id, reason="completed")
+  claims_stealable() → check if overloaded agents have stealable work
+  claims_steal(issueId=stealable_task, thiefId=idle_agent) → re-dispatch
+
+When agent is stuck (>2x median elapsed time):
+  claims_mark-stealable(issueId=task_id, reason="stale")
+  → Another idle agent can pick it up
+
+Periodic rebalance check:
+  claims_load() → agent utilization metrics
+  claims_rebalance(targetUtilization=0.7, dryRun=true) → preview
+  If skew >30%: apply rebalance (with user confirmation for >3 agents)
+```
+
+**With progress tracking (`mcp__claude-flow__progress_*`):**
+```
+progress_check() → current completion percentage across all batches
+progress_summary() → human-readable status for user
+```
 
 ---
 
@@ -208,6 +357,8 @@ Before writing code, challenge your own plan:
       what you're changing?
 - [ ] Does your approach match the project's patterns? (Check nearby
       files for conventions)
+- [ ] Could this change cause a regression in existing tests? (Grep
+      for test files that import your target modules)
 
 If you find a factual error in the task (file renamed, function deleted,
 problem already fixed), report it in your output — do NOT silently
@@ -236,20 +387,31 @@ Constraints:
   in your report (the orchestrator will coordinate)
 
 ═══════════════════════════════════════════════════════════════
-STEP 4 — TEST
+STEP 4 — TEST (eval-first gate)
 ═══════════════════════════════════════════════════════════════
 
-Run tests relevant to your changes. Auto-detect if no hint given:
+**4a. Baseline snapshot (BEFORE your changes — run first):**
+Run tests relevant to your changes and record pass/fail counts.
+This establishes what was already broken vs what you broke.
+
+Auto-detect test command if no hint given:
 - `.polybotenv/` or `pytest.ini` → `.polybotenv/bin/python -m pytest --timeout=30`
 - `package.json` → `npm test`
 - `Cargo.toml` → `cargo test`
 - `go.mod` → `go test ./...`
 - None found → report `tests.command: "none detected"`
 
-- Run tests BEFORE and AFTER your changes to establish a diff
+**4b. Post-implementation tests (AFTER your changes):**
+- Run the same test command again
+- Compare: new failures = your regressions; pre-existing failures = not yours
 - If your changes add new functionality, write tests for it
 - If tests fail that are unrelated to your changes, note them as
   pre-existing — do NOT fix unrelated tests
+
+**4c. Eval gate:**
+- If new regressions > 0: attempt to fix. If fix fails, set
+  `status: failed` with regression details. Do NOT submit broken code.
+- If all new tests pass + no new regressions: proceed to Step 5
 
 ═══════════════════════════════════════════════════════════════
 STEP 5 — REPORT
@@ -262,8 +424,10 @@ bookkeeping, and commit. Be precise.
 task_id: {N}
 task_summary: "{one_line}"
 status: {completed | failed | blocked | conflict}
-worktree_branch: "{branch name or null}"  # optional — orchestrator uses for merge
-elapsed_minutes: {N}                       # optional — detect hung agents
+risk_tier: {critical | high | standard | low | research}
+model_used: "{sonnet | opus}"
+worktree_branch: "{branch name or null}"
+elapsed_minutes: {N}
 
 # Step 1 findings
 analysis:
@@ -276,19 +440,21 @@ red_team:
   conflicts: ["RED_TEAM_CONFLICT: ..." or empty]
   corrections_made: ["description" or empty]
   hidden_dependencies_found: ["description" or empty]
+  regression_risk: {none | low | medium | high}
 
 # Step 3 results
 implementation:
   files_modified: ["path (+lines/-lines)" list]
   files_created: ["path" list or empty]
-  files_read: ["path" list]              # optional — detect reads outside ownership
+  files_read: ["path" list]
   approach: "{brief description}"
 
-# Step 4 results
+# Step 4 results (eval-first gate)
 tests:
   command: "{what you ran}"
-  passed: {N}
-  failed: {N}
+  baseline: {passed: N, failed: N}       # BEFORE changes
+  result: {passed: N, failed: N}         # AFTER changes
+  new_regressions: {N}                   # result.failed - baseline.failed
   skipped: {N}
   new_tests_added: ["test_name: what it covers" list or empty]
   pre_existing_failures: ["test_name" list or empty]
@@ -296,7 +462,7 @@ tests:
 # For orchestrator bookkeeping
 bookkeeping:
   suggested_follow_ups: ["new task description" list or empty]
-  cross_task_needs:                      # structured, not prose
+  cross_task_needs:
     - {task_id: N, need: "what", blocking: true|false}
   task_file_notes: "{anything to record on this issue}"
 ```
@@ -311,6 +477,7 @@ After all agents in a batch return:
 **Check for red team conflicts first:**
 - Any agent reported `RED_TEAM_CONFLICT`? → Show to user, ask before merging
 - Any agent `status: blocked`? → Note it, don't merge, keep task open
+- Any agent `status: failed`? → Check if failure is isolated or systemic
 
 ### Git Mode
 
@@ -356,6 +523,39 @@ If worktree HEAD == main HEAD (rare), standard merge works:
 5. **If invalid**: show error, offer per-file selective restore from backup
 6. **If all valid**: delete backup dir
 
+### Saga Compensation (rollback protocol for multi-agent failures)
+
+When a merge causes cascading failures (agent A's changes break agent B's):
+
+1. **Identify the failing agent** via test suite errors + `git blame` on failing lines
+2. **Selective rollback**: revert ONLY that agent's patch:
+   `git apply --reverse /tmp/<failing_agent>.patch`
+3. **Re-run tests** to confirm the remaining merges are clean
+4. **Mark the failed task** as `status: failed` with reason
+5. **If 2+ agents fail**: offer full rollback to `DISPATCH_BASE_SHA` tag
+6. **Never leave main in a broken state** — either fix or rollback before proceeding
+
+### Hypothesis-Driven Failure Analysis (for non-obvious test failures)
+
+When G1 test suite fails and the cause isn't immediately clear:
+
+1. Generate 2-3 hypotheses for the failure (e.g., "scope mismatch from agent A",
+   "missing import from agent B's refactor", "pre-existing flaky test")
+2. For each hypothesis, dispatch a debug agent:
+   ```
+   Agent(
+     description="Debug hypothesis: {hypothesis}",
+     subagent_type="team-debugger",
+     model="sonnet",
+     prompt="Investigate: {hypothesis}. Check {specific files}. Report evidence with file:line citations and confidence (high/medium/low).",
+     run_in_background=true
+   )
+   ```
+3. Compare evidence across hypotheses — highest-confidence wins
+4. Apply targeted fix based on winning hypothesis
+
+Only use for genuinely ambiguous failures. Most failures are obvious from the stack trace.
+
 **BATCH GATE (mandatory between batches):**
 1. All agents in current batch returned? If not, STOP.
 2. All `red_team.conflicts` resolved with user? If not, ask.
@@ -365,7 +565,7 @@ If worktree HEAD == main HEAD (rare), standard merge works:
 
 Only then: dispatch next batch.
 
-## Orchestrator Step F — BOOKKEEP
+## Orchestrator Step F — BOOKKEEP + LEARN
 
 Update the **original task list file** using agent reports:
 
@@ -384,20 +584,36 @@ Update the **original task list file** using agent reports:
 - Add `hidden_dependencies_found` as annotations on existing tasks
 - Record `corrections_made` (task descriptions that were wrong)
 
-**F5. Closed issues update:**
+**F4. Closed issues update:**
 - For each task with `status: completed`, search for a closed issues file (glob: `docs/closed-issues.md`, `CLOSED.md`)
 - If found: append completed tasks to its summary table, matching existing format
 - If the task was tracked in an open issues file (`open-issues.md`), remove or mark it there too
 - If no closed issues file exists, skip (don't create one)
 
-**F6. Dispatch metadata:**
+**F5. Dispatch metadata:**
 ```markdown
 ## Last Dispatch — {date}
 - Completed: {N}/{total}
 - Tests: {pass}/{total} ({new_tests} new)
+- Models: {sonnet: N, opus: N}
 - Conflicts: {list or "none"}
 - Follow-ups added: {N}
 ```
+
+**F6. Learning loop (if MCP intelligence tools available):**
+```
+Per completed task:
+  hooks_intelligence_trajectory-step(action="dispatch", quality=0.0-1.0 based on outcome)
+
+Per batch:
+  hooks_model-outcome(task=task_summary, model=model_used, result=success|failure|escalated)
+  → Feeds future model routing decisions
+
+If session ending:
+  hooks_intelligence_trajectory-end(summary=dispatch_metadata)
+```
+
+This is fire-and-forget — never block dispatch on learning.
 
 ## Orchestrator Step G — COMMIT + PUSH
 
@@ -411,7 +627,11 @@ run the full test suite (sandbox permissions, missing DB, old schema). The orche
 G1 test run is the only reliable integration check. If an agent reports "tests: blocked",
 this is expected — proceed to G1 regardless.
 
-**G2. If new failures:** identify which agent's changes likely caused it → offer fix agent, rollback that merge, or rollback all.
+**G2. If new failures:** identify which agent's changes likely caused it → offer:
+  - **Fix agent**: dispatch a targeted fix agent for the specific failure
+  - **Selective rollback**: revert just that agent's patch (saga compensation)
+  - **Full rollback**: revert to `DISPATCH_BASE_SHA` tag
+  - **Hypothesis debug**: if cause unclear, use hypothesis-driven analysis (see Step E)
 
 **G3. Stage + review:**
 - All agent-modified files + updated task file + new test files
@@ -435,6 +655,7 @@ Tasks completed:
 {per-task one-liner from agent reports}
 
 Tests: {pass}/{total} ({new} new)
+Models: {sonnet: N, opus: N}
 Mode: {Git|Config}
 
 Co-Authored-By: {current_model} <noreply@anthropic.com>
@@ -442,7 +663,16 @@ EOF
 )"
 ```
 
-**G5. Push** only if user has approved. Otherwise: "Changes committed. Run `git push` when ready."
+**G6. Push** only if user has approved. Otherwise: "Changes committed. Run `git push` when ready."
+
+**G7. Session persistence (if enabled):**
+```
+mcp__claude-flow__session_save(
+  sessionId=dispatch_session_id,
+  summary="Dispatch complete: N/M tasks, batch K of L"
+)
+```
+This allows resuming an interrupted multi-batch dispatch in a future conversation.
 
 ---
 
@@ -450,32 +680,37 @@ EOF
 
 | Layer | Step | What | Gate |
 |-------|------|------|------|
-| **Orchestrator** | 0 | Clean tree, commit + push | User approves commit/push |
-| **Orchestrator** | A-C | Parse, deps, ownership | User approves plan |
+| **Orchestrator** | 0 | Clean tree, commit + push, resume | User approves commit/push |
+| **Orchestrator** | A | Parse + risk score | — |
+| **Orchestrator** | B | Dependency graph + critical path | — |
+| **Orchestrator** | C | File ownership + model routing | User approves plan |
 | **Agent** | 1 | Analyze issue, check depends/blocks | Abort if dependency missing |
 | **Agent** | 2 | Red team own plan | Report conflicts to orchestrator |
 | **Agent** | 3 | Implement within owned files | — |
-| **Agent** | 4 | Run tests, write new tests | Report pass/fail |
+| **Agent** | 4 | Eval-first test gate (before + after) | Abort if new regressions |
 | **Agent** | 5 | Structured YAML report | — |
-| **Orchestrator** | E | Merge/validate, handle conflicts | User resolves red team conflicts |
-| **Orchestrator** | F | Update task file, record findings | — |
-| **Orchestrator** | G | Full test suite, commit, push | User approves push |
+| **Orchestrator** | D½ | Monitor + rebalance (optional) | — |
+| **Orchestrator** | E | Merge/validate, saga compensation | User resolves conflicts |
+| **Orchestrator** | F | Bookkeep + learning loop | — |
+| **Orchestrator** | G | Full test suite, commit, push, persist | User approves push |
 
 ## Agent Type Routing
 
-Auto-select based on task content:
+Auto-select based on task content and risk tier:
 
-| Task contains | Agent type |
-|--------------|-----------|
-| "test", "coverage", "spec" | `tdd-guide` |
-| "security", "auth", "credential" | `security-reviewer` |
-| "refactor", "clean", "dead code" | `refactor-cleaner` |
-| "performance", "optimize" | `performance-optimizer` |
-| Trading/financial logic | `check-trading` first |
-| "docs", "readme", "comment" | `doc-updater` |
-| "schema", "migration", "query", "SQL" | `database-reviewer` |
-| Multiple categories match | Priority: trading > security > tdd > general |
-| Everything else | `general-purpose` |
+| Task contains | Agent type | Default Model |
+|--------------|-----------|---------------|
+| "test", "coverage", "spec" | `tdd-guide` | sonnet |
+| "security", "auth", "credential" | `security-reviewer` | sonnet |
+| "refactor", "clean", "dead code" | `refactor-cleaner` | sonnet |
+| "performance", "optimize", "benchmark" | `performance-optimizer` | sonnet |
+| Trading/financial logic | `check-trading` first | sonnet |
+| "docs", "readme", "comment" | `doc-updater` | sonnet |
+| "schema", "migration", "query", "SQL" | `database-reviewer` | sonnet |
+| "investigate", "audit", "analyze", "measure" | `Explore` (read-only) | sonnet |
+| "debug", "fix", "broken", "failing" | `team-debugger` | sonnet |
+| Multiple categories match | Priority: trading > security > tdd > general | highest-risk model |
+| Everything else | `general-purpose` | sonnet |
 
 ## When NOT to Use This Skill
 
@@ -506,6 +741,26 @@ Auto-select based on task content:
 | Agent re-adds migration/changes already on main | Include `ALREADY ON MAIN` block in agent prompt listing recent changes to owned files. |
 | NameError after patch apply (scope mismatch) | Agent coded against old call chain. Full test suite catches it. Fix manually — thread var through new intermediary. |
 | Two agents write same migration number | Assign migration numbers in Step C based on current schema version + task order. Tell each agent its number. |
+| Using opus when sonnet suffices | Default to sonnet for all agents. Reserve opus for complex architecture + security-critical review. |
+| Leaving main broken after partial merge | Use saga compensation — selective rollback of failing agent's patch. Never leave broken state. |
+| Not recording dispatch outcomes | F6 learning loop improves future model routing and agent selection. |
+
+## MCP Integration Reference
+
+Optional MCP tools that enhance dispatch when available. The skill works without them —
+they add coordination, persistence, and learning capabilities.
+
+| Capability | Tools | When |
+|-----------|-------|------|
+| **Claims / work stealing** | `claims_claim`, `claims_release`, `claims_steal`, `claims_rebalance`, `claims_load` | 6+ agents, uneven task sizes |
+| **Progress tracking** | `progress_check`, `progress_summary` | 3+ batches, user wants visibility |
+| **Session persistence** | `session_save`, `session_restore` | Multi-hour dispatches, resumable work |
+| **Shared memory** | `hive-mind_init`, `hive-mind_memory`, `hive-mind_broadcast` | Cross-agent state (shared config, feature flags) |
+| **Model routing feedback** | `hooks_model-route`, `hooks_model-outcome`, `hooks_model-stats` | Continuous model selection improvement |
+| **Learning trajectories** | `hooks_intelligence_trajectory-start/step/end` | Pattern extraction for future dispatches |
+| **Diff risk analysis** | `analyze_diff`, `analyze_diff-risk`, `analyze_diff-reviewers` | Auto-reviewer suggestion post-merge |
+| **Consensus** | `coordination_consensus`, `hive-mind_consensus` | Multi-agent decisions (rare — e.g., conflicting approaches) |
+| **Topology** | `coordination_topology`, `swarm_init` | 10+ agents, complex dependency graphs |
 
 ## Integration
 
@@ -515,5 +770,10 @@ Auto-select based on task content:
 - **using-git-worktrees** — worktree directory selection, project setup auto-detection
 - **polybot-workflow** — model routing, rate limit policy, dispatch rules
 - **verification-before-completion** — final quality gate before claiming done
+- **team-composition-patterns** — preset team configurations for common scenarios
+- **task-coordination-strategies** — decomposition strategies, workload rebalancing
+- **agentic-engineering** — eval-first loops, 15-minute unit rule, cost discipline
+- **continuous-agent-loop** — persistent loops for long-running multi-batch dispatches
+- **swarm-orchestration** — topology selection (mesh/hierarchical/adaptive)
 
-**Invoked via:** `/parallel-task-dispatch {task-list-file}` or `--dry-run`
+**Invoked via:** `/parallel-task-dispatch {task-list-file}` or `--dry-run` or `--preset={name}`
