@@ -104,7 +104,9 @@ You can override any field.
 
 ## Orchestrator Step 0 — PRE-FLIGHT
 
-**Why:** Worktrees are created from the committed branch state. Uncommitted changes are invisible to agents and will cause merge conflicts when their work comes back.
+**Why:** Worktrees are created from the repo's **default branch** (usually `main`), NOT from
+the current working branch. Uncommitted changes AND feature-branch commits are invisible
+to worktree agents. This is the #1 cause of worktree agent failure.
 
 **Session resume check (if session persistence enabled):**
 ```
@@ -139,6 +141,50 @@ git diff --stat                       # unstaged changes?
 **After clean state confirmed**, record the baseline:
 ```bash
 git rev-parse HEAD   # save as DISPATCH_BASE_SHA for rollback reference
+```
+
+**CRITICAL — Feature-branch worktree viability check:**
+
+Claude Code's `isolation: "worktree"` creates worktrees from the repo's **default branch**
+(usually `main` or `master`), NOT from the current working branch. If you're on a feature
+branch, worktree agents will land on stale code and fail to implement.
+
+```bash
+CURRENT_BRANCH=$(git branch --show-current)
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+CURRENT_SHA=$(git rev-parse HEAD)
+DEFAULT_SHA=$(git rev-parse origin/$DEFAULT_BRANCH 2>/dev/null || echo "unknown")
+```
+
+**Worktree viability matrix:**
+
+| Current branch | Branch == default? | SHAs match? | Action |
+|----------------|-------------------|-------------|--------|
+| main/master | Yes | — | Worktrees work normally |
+| feature-branch | No | Yes (merged) | Worktrees work normally |
+| feature-branch | No | **No** | **WORKTREES WILL FAIL.** See fallback below |
+
+**When worktrees are NOT viable (feature branch ahead of default):**
+
+Set `WORKTREE_VIABLE=false`. For ALL code-modifying tasks in this dispatch:
+- Do **NOT** use `isolation: "worktree"` — agents implement directly on the current branch
+- Dispatch agents WITHOUT isolation but WITH strict file ownership enforcement
+- The orchestrator reviews each agent's changes before the next agent starts (sequential, not parallel for overlapping files)
+- Read-only/research agents can still run in parallel (no worktree needed)
+
+**If you MUST use parallel isolation on a feature branch:**
+1. Merge or rebase the feature branch onto the default branch first
+2. Push the merge to remote
+3. Re-verify worktree viability
+4. Only then proceed with worktree dispatch
+
+**Show the viability check result to the user before dispatch:**
+```
+Worktree viability: {VIABLE|NOT VIABLE}
+  Current branch: {branch} ({sha[:8]})
+  Default branch: {default} ({default_sha[:8]})
+  Delta: {N} commits ahead
+  Strategy: {worktree isolation | direct implementation (no worktree)}
 ```
 
 ## Orchestrator Step A — PARSE + RISK SCORE
@@ -222,8 +268,9 @@ complex architectural reasoning or security-critical code review.
 
 **All agents in a batch dispatched in ONE message.** Each agent receives the full 6-step lifecycle in its prompt.
 
-### Git Mode
+### Git Mode (worktree viable)
 
+Only use `isolation: "worktree"` when `WORKTREE_VIABLE=true` (see Step 0 viability check):
 ```
 Agent(
   description="Task N: {summary}",
@@ -233,6 +280,22 @@ Agent(
   run_in_background=true
 )
 ```
+
+### Git Mode (worktree NOT viable — feature branch)
+
+When `WORKTREE_VIABLE=false`, agents implement directly on the current branch without
+isolation. File ownership is enforced by instruction only (no physical isolation):
+```
+Agent(
+  description="Task N: {summary}",
+  prompt=AGENT_LIFECYCLE_PROMPT,
+  model="{risk-based model from Step C}",
+  run_in_background=true
+)
+```
+**Without worktree isolation, file overlap is dangerous.** Agents with overlapping owned
+files MUST run sequentially (split into separate batches). Agents with non-overlapping
+files can still run in parallel.
 
 ### Config Mode
 
@@ -247,7 +310,20 @@ Agent(
 
 **STOP after dispatch.** Wait for all agents in the batch to return.
 
-**ALREADY-ON-MAIN context (mandatory for worktree agents):**
+**Post-dispatch validation (MANDATORY for worktree agents):**
+When an agent returns, check its result for signs of worktree base drift:
+1. Agent only planned but didn't implement → **BASE DRIFT.** Implement directly.
+2. Agent reports `status: blocked` with "dependency missing" → likely base drift
+3. Worktree was cleaned up with no changes persisted → agent didn't write code
+4. Agent's worktree HEAD doesn't match DISPATCH_BASE_SHA → stale base
+
+**Recovery from base drift (implement-direct fallback):**
+If worktree agents fail due to base drift, do NOT re-dispatch with worktrees.
+Instead, use the agent's PLAN output as instructions and implement directly on
+the current branch. The agent's analysis (Step 1-2) and plan are still valuable
+even when implementation (Step 3) failed.
+
+**ALREADY-ON-MAIN context (mandatory for worktree agents when viable):**
 Worktree agents may land on a stale base commit (see Step E). To prevent agents from
 re-implementing changes that already exist on main, include an `ALREADY ON MAIN` block
 in each agent's prompt when their owned files were modified in recent commits:
@@ -560,10 +636,43 @@ Only use for genuinely ambiguous failures. Most failures are obvious from the st
 1. All agents in current batch returned? If not, STOP.
 2. All `red_team.conflicts` resolved with user? If not, ask.
 3. All merges completed without conflict? If not, resolve.
-4. Full test suite passes? If not, fix or rollback.
-5. Update DISPATCH_BASE_SHA to post-merge HEAD.
+4. **Completeness check passed** (see below)? If not, implement missing items or re-dispatch.
+5. **Ownership check passed** (see below)? If not, revert unauthorized files.
+6. Full test suite passes? If not, fix or rollback.
+7. Update DISPATCH_BASE_SHA to post-merge HEAD.
 
 Only then: dispatch next batch.
+
+### Pre-commit Verification (mandatory)
+
+Agent self-reports are unreliable. Two grep-based checks before committing:
+
+**Completeness check** — agents silently skip sub-tasks from multi-item prompts.
+Extract a greppable token from each concrete plan item, grep for it:
+
+| Plan item | Greppable token |
+|-----------|----------------|
+| New event/function | exact string, e.g. `"candidate_decision"` |
+| Bug fix `X → Y` | `Y` must exist **and** `X` must not |
+| New import | full import line |
+| New config field | field name |
+
+Zero matches = silently dropped. Implement directly (fastest) or re-dispatch a
+narrow agent with an explicit "ONLY implement these missing items" prompt.
+
+**Ownership check** — agents modify files beyond their declared ownership:
+
+```bash
+EXPECTED="fileA.py fileB.py strategy/fileC.py"
+git diff --stat --name-only | while read f; do
+    case " $EXPECTED " in *" $f "*) ;; *) echo "UNAUTHORIZED: $f" ;; esac
+done
+```
+
+Unauthorized files → `git checkout` to revert (common case), or show diff to user.
+Observed failure modes: scope creep refactors, new test files for unowned modules,
+opportunistic "fixes" to pre-existing issues, schema-dependent code that breaks
+tests elsewhere.
 
 ## Orchestrator Step F — BOOKKEEP + LEARN
 
@@ -743,7 +852,13 @@ Auto-select based on task content and risk tier:
 | Two agents write same migration number | Assign migration numbers in Step C based on current schema version + task order. Tell each agent its number. |
 | Using opus when sonnet suffices | Default to sonnet for all agents. Reserve opus for complex architecture + security-critical review. |
 | Leaving main broken after partial merge | Use saga compensation — selective rollback of failing agent's patch. Never leave broken state. |
+| Using worktrees on feature branches | Worktrees create from DEFAULT branch, not current branch. Run viability check in Step 0. If not viable, dispatch WITHOUT `isolation: "worktree"`. |
+| Worktree agent "only planned, didn't implement" | Base drift — agent landed on old code. Use agent's plan as instructions, implement directly on current branch. Do NOT re-dispatch with worktrees. |
 | Not recording dispatch outcomes | F6 learning loop improves future model routing and agent selection. |
+| Trusting agent's "complete" report | Agents drop sub-tasks silently. Grep for each planned item before committing — see Pre-commit Verification in Step E. |
+| Skipping `git diff --stat` before commit | Agents modify files outside their ownership. Run the ownership check and revert unauthorized files. |
+| Multi-item agent prompt as prose paragraph | Items buried in prose get skipped. Number each sub-task; require per-item status in the Step 5 report. |
+| No-worktree agent runs full test suite | Concurrent edits produce false regressions. No-worktree agents skip the full suite; orchestrator runs it at G1. |
 
 ## MCP Integration Reference
 
