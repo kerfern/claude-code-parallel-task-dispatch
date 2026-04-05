@@ -45,13 +45,13 @@ done
 # Latest commit info (best-effort)
 LATEST=$(curl -fsSL "$API" 2>/dev/null | grep -E '"(sha|date)"' | head -2)
 
-# Diff summary
-SKILL_DIFF=$(diff -u "$SKILL_DST" "$TMP/SKILL.md" 2>/dev/null | grep -c '^[+-]' || echo 0)
-CMD_DIFF=$(diff -u "$CMD_DST"    "$TMP/update-parallel-task-dispatch.md" 2>/dev/null | grep -c '^[+-]' || echo 0)
+# Diff summary (grep -c always prints a number; `|| true` suppresses its exit code)
+SKILL_DIFF=$(diff -u "$SKILL_DST" "$TMP/SKILL.md" 2>/dev/null | grep -c '^[+-]' || true)
+CMD_DIFF=$(diff -u "$CMD_DST"    "$TMP/update-parallel-task-dispatch.md" 2>/dev/null | grep -c '^[+-]' || true)
 REFS_DIFF=0
 for ref in "${REFS[@]}"; do
-  d=$(diff -u "$REFS_DST/${ref}" "$TMP/references/${ref}" 2>/dev/null | grep -c '^[+-]' || echo 0)
-  REFS_DIFF=$((REFS_DIFF + d))
+  d=$(diff -u "$REFS_DST/${ref}" "$TMP/references/${ref}" 2>/dev/null | grep -c '^[+-]' || true)
+  REFS_DIFF=$((REFS_DIFF + ${d:-0}))
 done
 
 if [ "$SKILL_DIFF" = "0" ] && [ "$CMD_DIFF" = "0" ] && [ "$REFS_DIFF" = "0" ]; then
