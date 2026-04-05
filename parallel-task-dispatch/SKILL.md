@@ -215,6 +215,28 @@ Options:
   [C] Abort
 ```
 
+## Serial-Before-Parallel Invariant
+
+**Any serial orchestrator work before a worktree dispatch must be committed and pushed
+to `origin/<default_branch>` first.** Worktrees spawn from the remote default branch;
+unpushed changes are invisible. Root cause of "agent only planned" and "agent re-added
+something already on main."
+
+Applies at:
+1. **Pre-flight** (Step 0) — initial dirty/unpushed state.
+2. **Between batches** (Step E BATCH GATE) — batch N's merge before batch N+1 dispatches.
+3. **After inline orchestrator edits** — completeness fixes, patch resolutions,
+   ownership reverts, test fixes. If worktree agents follow, push first.
+
+**Pre-dispatch check (worktree isolation only):**
+```bash
+git status --short && git log @{u}..HEAD --oneline   # both must be empty
+```
+If dirty/unpushed: show diff, get user approval (same policy as Step 0), commit+push,
+re-run Step 0 viability check, then dispatch.
+
+**Skip when:** read-only/research agents, config mode, or `WORKTREE_VIABLE=false`.
+
 ## Orchestrator Step A — PARSE + RISK SCORE
 
 Read the task list file. Extract per task:
@@ -667,7 +689,9 @@ Only use for genuinely ambiguous failures. Most failures are obvious from the st
 4. **Completeness check passed** (see below)? If not, implement missing items or re-dispatch.
 5. **Ownership check passed** (see below)? If not, revert unauthorized files.
 6. Full test suite passes? If not, fix or rollback.
-7. Update DISPATCH_BASE_SHA to post-merge HEAD.
+7. **Sync for next batch** (if batch N+1 uses worktrees): commit + push batch N's
+   merges + inline edits, re-run Step 0 viability. See **Serial-Before-Parallel Invariant**.
+8. Update DISPATCH_BASE_SHA to post-push HEAD.
 
 Only then: dispatch next batch.
 
@@ -868,7 +892,7 @@ Auto-select based on task content and risk tier:
 | Dispatching Batch 2 before merging Batch 1 | Sequential — merge then dispatch |
 | Committing without full test suite | Step G1 catches cross-agent integration issues |
 | Pushing without approval | NEVER auto-push |
-| Dispatching with dirty working tree | Step 0 — commit + push first; worktrees won't see uncommitted changes |
+| Serial work unpushed before a worktree dispatch | Commit + push to `origin/<default>` first, re-verify viability. Applies to initial state, between-batch merges, AND inline orchestrator fixes. See **Serial-Before-Parallel Invariant**. |
 | Agent blocks on empty test hint | Auto-detect test command; report "none detected" if unavailable |
 | Merging before all batch agents finish | BATCH GATE — all 5 checks must pass before next batch |
 | Config mode with no backup | Always create `/tmp` backup before config dispatch |
