@@ -35,25 +35,26 @@ Turn a task list into parallel agent work — each agent runs a full 6-step life
 
 ## Installation
 
-### Quick Install (one command)
+### Quick Install (recommended)
+
+Clones the repo and runs `install.sh`, which copies both the skill and the
+`/update-parallel-task-dispatch` self-update command into `~/.claude/`:
 
 ```bash
-# Clone into your Claude Code skills directory
-git clone https://github.com/kerfern/claude-code-parallel-task-dispatch.git ~/.claude/skills/claude-code-parallel-task-dispatch
-
-# Create a symlink so Claude Code discovers the skill
-ln -sf ~/.claude/skills/claude-code-parallel-task-dispatch/parallel-task-dispatch ~/.claude/skills/parallel-task-dispatch
+git clone https://github.com/kerfern/claude-code-parallel-task-dispatch.git /tmp/ptd
+bash /tmp/ptd/install.sh
 ```
 
 ### Manual Install
 
-1. Download [`parallel-task-dispatch/SKILL.md`](parallel-task-dispatch/SKILL.md)
-2. Place it at `~/.claude/skills/parallel-task-dispatch/SKILL.md`
-
 ```bash
-mkdir -p ~/.claude/skills/parallel-task-dispatch
+mkdir -p ~/.claude/skills/parallel-task-dispatch ~/.claude/commands
+
 curl -o ~/.claude/skills/parallel-task-dispatch/SKILL.md \
   https://raw.githubusercontent.com/kerfern/claude-code-parallel-task-dispatch/main/parallel-task-dispatch/SKILL.md
+
+curl -o ~/.claude/commands/update-parallel-task-dispatch.md \
+  https://raw.githubusercontent.com/kerfern/claude-code-parallel-task-dispatch/main/commands/update-parallel-task-dispatch.md
 ```
 
 ### Verify Installation
@@ -65,6 +66,12 @@ Start a Claude Code session and type:
 ```
 
 If the skill is recognized, Claude will begin the orchestration flow.
+
+### Keeping it up to date
+
+Once installed, run `/update-parallel-task-dispatch` inside any Claude Code session.
+It fetches the latest `SKILL.md` and self-update command from this repo, shows a
+diff, and overwrites the local copies after you confirm.
 
 ## Usage
 
