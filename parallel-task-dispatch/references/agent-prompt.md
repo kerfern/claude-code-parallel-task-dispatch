@@ -1,11 +1,11 @@
 # Agent Lifecycle Prompt Template
 
-Each agent dispatched by `parallel-task-dispatch` receives this 5-step template as its
+Each agent dispatched by `parallel-task-dispatch` receives this 6-step template as its
 full instruction set. Orchestrator fills in `{placeholders}` at dispatch time, one per task.
 
 ```markdown
 You are implementing a task{" in an isolated git worktree" | ""}. Follow
-these 5 steps IN ORDER. Do not skip any step.
+these 6 steps IN ORDER. Do not skip any step.
 
 ═══════════════════════════════════════════════════════════════
 STEP 1 — ANALYZE
@@ -30,10 +30,28 @@ Do the following:
 - Note the current state: what exists now vs what the task asks for
 
 ═══════════════════════════════════════════════════════════════
-STEP 2 — RED TEAM YOUR PLAN
+STEP 2 — PLAN
 ═══════════════════════════════════════════════════════════════
 
-Before writing code, challenge your own plan:
+Produce an explicit plan before red-teaming or writing code:
+
+1. **Files to modify** — list each owned file + the change it needs
+2. **Order of operations** — which file first? Any inter-change dependencies?
+3. **Specific changes** — function names, signatures, key logic edits
+4. **Verification approach** — how will you know the change works? Tests to run?
+5. **Edge cases** — what inputs/states might break?
+
+Write the plan as structured notes (list or bullets). Do not skip to code —
+planning forces you to think through all files and interactions before committing.
+
+A weak plan causes surprises at Step 5 (Test). A strong plan makes Step 4
+(Implement) mostly mechanical.
+
+═══════════════════════════════════════════════════════════════
+STEP 3 — RED TEAM YOUR PLAN
+═══════════════════════════════════════════════════════════════
+
+Challenge the plan from Step 2 before implementing:
 
 - [ ] Do the files mentioned in the task actually exist? At the paths
       described? With the functions/classes referenced?
@@ -52,11 +70,11 @@ problem already fixed), report it in your output — do NOT silently
 reinterpret the task.
 
 If you cannot reconcile a conflict between the task description and
-reality, record it in your Step 5 report under `red_team.conflicts`.
+reality, record it in your Step 6 report under `red_team.conflicts`.
 The orchestrator will ask the user before merging.
 
 ═══════════════════════════════════════════════════════════════
-STEP 3 — IMPLEMENT
+STEP 4 — IMPLEMENT
 ═══════════════════════════════════════════════════════════════
 
 **Owned Files** (you may modify ONLY these):
@@ -74,10 +92,10 @@ Constraints:
   in your report (the orchestrator will coordinate)
 
 ═══════════════════════════════════════════════════════════════
-STEP 4 — TEST (eval-first gate)
+STEP 5 — TEST (eval-first gate)
 ═══════════════════════════════════════════════════════════════
 
-**4a. Baseline snapshot (BEFORE your changes — run first):**
+**5a. Baseline snapshot (BEFORE your changes — run first):**
 Run tests relevant to your changes and record pass/fail counts.
 This establishes what was already broken vs what you broke.
 
@@ -88,20 +106,20 @@ Auto-detect test command if no hint given:
 - `go.mod` → `go test ./...`
 - None found → report `tests.command: "none detected"`
 
-**4b. Post-implementation tests (AFTER your changes):**
+**5b. Post-implementation tests (AFTER your changes):**
 - Run the same test command again
 - Compare: new failures = your regressions; pre-existing failures = not yours
 - If your changes add new functionality, write tests for it
 - If tests fail that are unrelated to your changes, note them as
   pre-existing — do NOT fix unrelated tests
 
-**4c. Eval gate:**
+**5c. Eval gate:**
 - If new regressions > 0: attempt to fix. If fix fails, set
   `status: failed` with regression details. Do NOT submit broken code.
-- If all new tests pass + no new regressions: proceed to Step 5
+- If all new tests pass + no new regressions: proceed to Step 6
 
 ═══════════════════════════════════════════════════════════════
-STEP 5 — REPORT
+STEP 6 — REPORT
 ═══════════════════════════════════════════════════════════════
 
 Return a structured report. The orchestrator uses this for merge,
@@ -122,6 +140,13 @@ analysis:
   files_examined: [list]
 
 # Step 2 findings
+plan:
+  files_and_changes: ["file: change" list]
+  order: [file list or null]
+  verification: "{how you'll know it works}"
+  edge_cases: ["case" list or empty]
+
+# Step 3 findings
 red_team:
   all_facts_verified: {true | false}
   conflicts: ["RED_TEAM_CONFLICT: ..." or empty]
@@ -129,14 +154,14 @@ red_team:
   hidden_dependencies_found: ["description" or empty]
   regression_risk: {none | low | medium | high}
 
-# Step 3 results
+# Step 4 results
 implementation:
   files_modified: ["path (+lines/-lines)" list]
   files_created: ["path" list or empty]
   files_read: ["path" list]
   approach: "{brief description}"
 
-# Step 4 results (eval-first gate)
+# Step 5 results (eval-first gate)
 tests:
   command: "{what you ran}"
   baseline: {passed: N, failed: N}       # BEFORE changes

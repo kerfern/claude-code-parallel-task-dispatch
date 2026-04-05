@@ -1,6 +1,6 @@
 ---
 name: parallel-task-dispatch
-description: Use when you have a task list file with 2+ tasks to implement in parallel. Each agent runs a full 6-step lifecycle (analyze issue, red-team plan, implement, test, report bookkeeping, report for commit). Orchestrator handles dependency graphs, file ownership, model routing, merge/reconcile, task file updates, and commit+push. Supports claims-based work stealing, team presets, eval-first gates, risk scoring, session persistence, and saga rollback. Auto-detects git worktree vs config mode. Triggers on "run tasks in parallel", "dispatch task list", "work through issues list". Not for single tasks.
+description: Use when you have a task list file with 2+ tasks to implement in parallel. Each agent runs a full 6-step lifecycle (analyze, plan, red-team, implement, test, report). Orchestrator handles dependency graphs, file ownership, model routing, merge/reconcile, task file updates, and commit+push. Supports claims-based work stealing, team presets, eval-first gates, risk scoring, session persistence, and saga rollback. Auto-detects git worktree vs config mode. Triggers on "run tasks in parallel", "dispatch task list", "work through issues list". Not for single tasks.
 ---
 
 # Parallel Task Dispatch
@@ -16,13 +16,13 @@ ORCHESTRATOR (shared state)          AGENTS (per-task, isolated)
 ================================     ================================
 0. Pre-flight — clean tree,          1. Analyze — read issue, check
    commit + push, resume session        depends/blocks, verify facts
-A. Parse task file + risk score      2. Red team — challenge own plan,
-B. Build dependency graph               verify files exist, check
-C. Assign file ownership + model        assumptions before coding
-C½. Worktree necessity check         (sets execution mode)
-D. Dispatch parallel batches    →    3. Implement — write code/config
-D½. Monitor + rebalance        ↔     4. Test — eval-first gates
-E. Merge/validate results     ←     5. Report — structured output
+A. Parse task file + risk score      2. Plan — files/changes, order,
+B. Build dependency graph               verification, edge cases
+C. Assign file ownership + model     3. Red team — challenge plan,
+C½. Worktree necessity check            verify assumptions
+D. Dispatch parallel batches    →    4. Implement — write code/config
+D½. Monitor + rebalance        ↔     5. Test — eval-first gates
+E. Merge/validate results     ←     6. Report — structured output
 F. Bookkeep task file + learn           for orchestrator steps E-G
 G. Commit + push + persist
 
@@ -35,7 +35,7 @@ G. Commit + push + persist
          Learning — SONA trajectories
 ```
 
-**Steps 1-5 are per-agent.** Each agent runs the full lifecycle autonomously in its worktree/context. The orchestrator never implements — it coordinates.
+**Steps 1-6 are per-agent.** Each agent runs the full lifecycle autonomously in its worktree/context. The orchestrator never implements — it coordinates.
 
 ### Execution Modes (auto-detected)
 
@@ -51,7 +51,7 @@ MCP tools are available or task complexity warrants them). Never skip core for e
 
 | Layer | Steps | Requires | Default |
 |-------|-------|----------|---------|
-| **Core** | 0, A, B, C, C½, D-G + Agent 1-5 | Claude Code Task tool | Always on |
+| **Core** | 0, A, B, C, C½, D-G + Agent 1-6 | Claude Code Task tool | Always on |
 | **Worktree necessity check** | C½ | — | On — selects execution mode (user-overridable) |
 | **Serial-Before-Parallel Invariant** | 0, E BATCH GATE, all pre-worktree dispatches | — | On — worktree-mode only |
 | **Model routing** | C, D | — | On (built into agent params) |
@@ -382,8 +382,8 @@ When an agent returns, check its result for signs of worktree base drift:
 **Recovery from base drift (switch to `file-ownership-parallel`):**
 If worktree agents fail due to base drift, do NOT re-dispatch with worktrees.
 Instead, use the agent's PLAN output as instructions and implement directly on
-the current branch. The agent's analysis (Step 1-2) and plan are still valuable
-even when implementation (Step 3) failed.
+the current branch. The agent's analysis + plan (Steps 1-3) are still valuable
+even when implementation (Step 4) failed.
 
 **ALREADY-ON-MAIN context (mandatory for worktree agents when viable):**
 Worktree agents may land on a stale base commit (see Step E). To prevent agents from
@@ -450,9 +450,9 @@ progress_summary() → human-readable status for user
 
 ---
 
-## Agent Lifecycle (Steps 1-5)
+## Agent Lifecycle (Steps 1-6)
 
-Each agent receives a 5-step template (Analyze → Red Team → Implement → Test → Report)
+Each agent receives a 6-step template (Analyze → Plan → Red Team → Implement → Test → Report)
 embedded in its dispatch prompt. Full template with placeholders and YAML report schema:
 see `references/agent-prompt.md`. Orchestrator loads this at dispatch time and fills in
 per-task fields (`{task_description}`, `{file_list}`, `{read_only_list}`, etc.).
@@ -703,7 +703,7 @@ This allows resuming an interrupted multi-batch dispatch in a future conversatio
 
 ## Quick Reference
 
-Flow: 0 → A → B → C → C½ → D → D½ → E → F → G (orchestrator) + 1-5 per agent.
+Flow: 0 → A → B → C → C½ → D → D½ → E → F → G (orchestrator) + 1-6 per agent.
 User gates: Step 0 (commit/push), C (plan), C½ (mode), G (push).
 
 ## Agent Type Routing
