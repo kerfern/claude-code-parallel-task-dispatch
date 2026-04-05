@@ -6,7 +6,7 @@ Referenced from `SKILL.md` under "Common Mistakes".
 | Mistake | Fix |
 |---------|-----|
 | Orchestrator implements code | Orchestrator NEVER implements — agents do |
-| Agent skips red team | Steps 1-5 are mandatory, in order |
+| Agent skips red team | Steps 1-6 are mandatory, in order |
 | Agent fixes unrelated tests | Report pre-existing failures, don't fix |
 | Agent silently reinterprets task | Report RED_TEAM_CONFLICT, let user decide |
 | Dispatching Batch 2 before merging Batch 1 | Sequential — merge then dispatch |
@@ -30,5 +30,5 @@ Referenced from `SKILL.md` under "Common Mistakes".
 | Not recording dispatch outcomes | F6 learning loop improves future model routing and agent selection. |
 | Trusting agent's "complete" report | Agents drop sub-tasks silently. Grep for each planned item before committing — see Pre-commit Verification in Step E. |
 | Skipping `git diff --stat` before commit | Agents modify files outside their ownership. Run the ownership check and revert unauthorized files. |
-| Multi-item agent prompt as prose paragraph | Items buried in prose get skipped. Number each sub-task; require per-item status in the Step 5 report. |
+| Multi-item agent prompt as prose paragraph | Items buried in prose get skipped. Number each sub-task; require per-item status in the Step 6 report. |
 | No-worktree agent runs full test suite | Concurrent edits produce false regressions. No-worktree agents skip the full suite; orchestrator runs it at G1. |
