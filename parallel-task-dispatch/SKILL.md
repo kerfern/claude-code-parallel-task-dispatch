@@ -5,6 +5,8 @@ description: Use when you have a task list file with 2+ tasks to implement in pa
 
 # Parallel Task Dispatch
 
+**Source:** https://github.com/kerfern/claude-code-parallel-task-dispatch — run `/update-parallel-task-dispatch` to pull the latest version.
+
 ## Architecture
 
 Three layers — **orchestrator** (you), **agents** (per-task), and **coordination** (MCP-backed):
