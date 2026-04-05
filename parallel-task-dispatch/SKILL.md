@@ -19,6 +19,7 @@ ORCHESTRATOR (shared state)          AGENTS (per-task, isolated)
 A. Parse task file + risk score      2. Red team — challenge own plan,
 B. Build dependency graph               verify files exist, check
 C. Assign file ownership + model        assumptions before coding
+C½. Worktree necessity check         (sets execution mode)
 D. Dispatch parallel batches    →    3. Implement — write code/config
 D½. Monitor + rebalance        ↔     4. Test — eval-first gates
 E. Merge/validate results     ←     5. Report — structured output
@@ -50,7 +51,9 @@ MCP tools are available or task complexity warrants them). Never skip core for e
 
 | Layer | Steps | Requires | Default |
 |-------|-------|----------|---------|
-| **Core** | 0-G + Agent 1-5 | Claude Code Task tool | Always on |
+| **Core** | 0, A, B, C, C½, D-G + Agent 1-5 | Claude Code Task tool | Always on |
+| **Worktree necessity check** | C½ | — | On — selects execution mode (user-overridable) |
+| **Serial-Before-Parallel Invariant** | 0, E BATCH GATE, all pre-worktree dispatches | — | On — worktree-mode only |
 | **Model routing** | C, D | — | On (built into agent params) |
 | **Risk scoring** | A, C | — | On (keyword heuristic) |
 | **Eval-first gates** | Agent 4 | — | On (tests before + after) |
@@ -235,7 +238,7 @@ git status --short && git log @{u}..HEAD --oneline   # both must be empty
 If dirty/unpushed: show diff, get user approval (same policy as Step 0), commit+push,
 re-run Step 0 viability check, then dispatch.
 
-**Skip when:** read-only/research agents, config mode, or `WORKTREE_VIABLE=false`.
+**Skip when:** read-only/research agents, config mode, or execution mode is `file-ownership-parallel` or `serial-batches` (no worktrees used).
 
 ## Orchestrator Step A — PARSE + RISK SCORE
 
@@ -314,13 +317,57 @@ complex architectural reasoning or security-critical code review.
 
 **User approves before dispatch.**
 
+## Worktree Necessity Check
+
+**Worktrees add overhead** — commit+push cycles, base-drift risk, merge reconciliation.
+Before defaulting to `isolation: "worktree"`, check whether the tasks actually need
+physical isolation. Evaluated after Step C (file ownership known):
+
+| File overlap? | Risk tier | Execution mode |
+|---------------|-----------|----------------|
+| None (disjoint) | Standard/Low/Research | **`file-ownership-parallel`** — no worktrees |
+| None (disjoint) | Critical/High | **`worktree-parallel`** — isolation for rollback |
+| Overlap + worktrees viable | Any | **`worktree-parallel`** — prevents races |
+| Overlap + worktrees NOT viable | Any | **`serial-batches`** — split overlaps sequentially |
+
+**`file-ownership-parallel`**: all owned-file sets disjoint AND no critical/high-risk work
+(trading, auth, migrations, schema). Fastest path — skips worktree setup entirely; no
+Serial-Before-Parallel Invariant applies.
+
+**`worktree-parallel`**: file overlap requires physical isolation OR critical/high-risk
+work needs clean rollback. Requires `WORKTREE_VIABLE=true` from Step 0.
+
+**`serial-batches`**: overlap exists AND worktrees not viable. Step B splits overlapping
+tasks across sequential batches; disjoint tasks in each batch still run in parallel with
+file ownership.
+
+Show the mode before dispatch with override options:
+```
+Execution mode: {file-ownership-parallel | worktree-parallel | serial-batches}
+  Reason: {disjoint + standard risk | overlap + viable | overlap + feature branch}
+  Override:
+    [A] Accept (proceed to Step D)
+    [B] Force worktree-parallel    (requires WORKTREE_VIABLE=true)
+    [C] Force file-ownership-parallel (skips worktrees even on critical/high risk)
+    [D] Abort dispatch
+```
+
+User can override when risk tolerance differs from the heuristic — paranoid on
+migrations → force worktree; time-sensitive non-critical → force file-ownership.
+Default: accept. Option [B] is unavailable when `WORKTREE_VIABLE=false`.
+Option [C] with overlap requires re-running Step B/C to split overlapping tasks
+into sequential batches.
+
+Step D's `isolation: "worktree"` flag uses the final (post-override) mode.
+
 ## Orchestrator Step D — DISPATCH
 
 **All agents in a batch dispatched in ONE message.** Each agent receives the full 6-step lifecycle in its prompt.
+**Dispatch mode is set by the Worktree Necessity Check** (`worktree-parallel` | `file-ownership-parallel` | `serial-batches`).
 
-### Git Mode (worktree viable)
+### Git Mode: `worktree-parallel`
 
-Only use `isolation: "worktree"` when `WORKTREE_VIABLE=true` (see Step 0 viability check):
+Only use `isolation: "worktree"` when the Necessity Check selected `worktree-parallel` AND `WORKTREE_VIABLE=true`:
 ```
 Agent(
   description="Task N: {summary}",
@@ -331,10 +378,11 @@ Agent(
 )
 ```
 
-### Git Mode (worktree NOT viable — feature branch)
+### Git Mode: `file-ownership-parallel` or `serial-batches`
 
-When `WORKTREE_VIABLE=false`, agents implement directly on the current branch without
-isolation. File ownership is enforced by instruction only (no physical isolation):
+When the Necessity Check selected `file-ownership-parallel` (disjoint files, no critical
+risk) OR `serial-batches` (overlap + worktrees not viable), agents implement directly on
+the current branch without isolation. File ownership is enforced by instruction only:
 ```
 Agent(
   description="Task N: {summary}",
@@ -367,7 +415,7 @@ When an agent returns, check its result for signs of worktree base drift:
 3. Worktree was cleaned up with no changes persisted → agent didn't write code
 4. Agent's worktree HEAD doesn't match DISPATCH_BASE_SHA → stale base
 
-**Recovery from base drift (implement-direct fallback):**
+**Recovery from base drift (switch to `file-ownership-parallel`):**
 If worktree agents fail due to base drift, do NOT re-dispatch with worktrees.
 Instead, use the agent's PLAN output as instructions and implement directly on
 the current branch. The agent's analysis (Step 1-2) and plan are still valuable
@@ -691,7 +739,10 @@ Only use for genuinely ambiguous failures. Most failures are obvious from the st
 6. Full test suite passes? If not, fix or rollback.
 7. **Sync for next batch** (if batch N+1 uses worktrees): commit + push batch N's
    merges + inline edits, re-run Step 0 viability. See **Serial-Before-Parallel Invariant**.
-8. Update DISPATCH_BASE_SHA to post-push HEAD.
+8. **Re-run Worktree Necessity Check** if batch N added new tasks (from
+   `suggested_follow_ups`) or reshuffled file ownership. The execution mode may shift
+   for batch N+1 (e.g., newly-added task creates overlap → switch to `worktree-parallel`).
+9. Update DISPATCH_BASE_SHA to post-push HEAD.
 
 Only then: dispatch next batch.
 
@@ -845,6 +896,8 @@ This allows resuming an interrupted multi-batch dispatch in a future conversatio
 | **Orchestrator** | A | Parse + risk score | — |
 | **Orchestrator** | B | Dependency graph + critical path | — |
 | **Orchestrator** | C | File ownership + model routing | User approves plan |
+| **Orchestrator** | C½ | Worktree necessity → execution mode | User sees mode + reason |
+| **Orchestrator** | D | Dispatch batch (ONE message, all agents) | — |
 | **Agent** | 1 | Analyze issue, check depends/blocks | Abort if dependency missing |
 | **Agent** | 2 | Red team own plan | Report conflicts to orchestrator |
 | **Agent** | 3 | Implement within owned files | — |
@@ -876,10 +929,10 @@ Auto-select based on task content and risk tier:
 ## When NOT to Use This Skill
 
 - Single task — just implement it directly
-- All tasks modify the same file — sequential, not parallel
 - Tasks have circular dependencies that can't be broken
 - Tasks require real-time coordination (chat, shared state)
 - Fewer than 2 tasks — overhead exceeds benefit
+- (Note: all tasks touching the same file is fine — `serial-batches` mode handles it)
 
 ## Common Mistakes
 
