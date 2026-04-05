@@ -162,21 +162,43 @@ DEFAULT_SHA=$(git rev-parse origin/$DEFAULT_BRANCH 2>/dev/null || echo "unknown"
 |----------------|-------------------|-------------|--------|
 | main/master | Yes | — | Worktrees work normally |
 | feature-branch | No | Yes (merged) | Worktrees work normally |
-| feature-branch | No | **No** | **WORKTREES WILL FAIL.** See fallback below |
+| feature-branch | No | **No** | Offer user merge-forward (recommended) OR direct-implementation fallback |
 
-**When worktrees are NOT viable (feature branch ahead of default):**
+**When the feature branch is ahead of default — two paths:**
+
+### Path 1 (RECOMMENDED): Merge-forward before dispatch
+
+This is the cleanest fix and matches standard Git flow. After merging the feature
+branch forward, `origin/main` equals the current work and worktrees land on the
+correct SHA. Ask the user before doing this:
+
+```bash
+git checkout main
+git merge --ff-only <feature-branch>   # fast-forward if possible; otherwise PR-merge
+git push origin main
+git checkout <feature-branch>          # return to feature branch for the dispatch
+# (optional) git branch -d <feature-branch>  if it's now redundant
+```
+
+After merge-forward, re-run the viability check — worktrees will be VIABLE and you
+can dispatch with `isolation: "worktree"` for true parallel isolation.
+
+**Offer this as the first option whenever feature-branch is ahead of default.**
+It converts the dispatch from "no-isolation sequential-for-overlaps" back into
+"full-worktree true-parallel" — which is the entire point of this skill.
+
+**When NOT to offer merge-forward:** the feature branch is not ready to land
+(tests failing, WIP, needs review), OR the user has explicitly said they want
+to keep work isolated from main. In those cases fall through to Path 2.
+
+### Path 2 (FALLBACK): Direct implementation without worktrees
 
 Set `WORKTREE_VIABLE=false`. For ALL code-modifying tasks in this dispatch:
 - Do **NOT** use `isolation: "worktree"` — agents implement directly on the current branch
 - Dispatch agents WITHOUT isolation but WITH strict file ownership enforcement
-- The orchestrator reviews each agent's changes before the next agent starts (sequential, not parallel for overlapping files)
+- Agents with OVERLAPPING owned files MUST run sequentially (separate batches)
+- Agents with disjoint owned files can still run in parallel in one batch
 - Read-only/research agents can still run in parallel (no worktree needed)
-
-**If you MUST use parallel isolation on a feature branch:**
-1. Merge or rebase the feature branch onto the default branch first
-2. Push the merge to remote
-3. Re-verify worktree viability
-4. Only then proceed with worktree dispatch
 
 **Show the viability check result to the user before dispatch:**
 ```
@@ -184,7 +206,11 @@ Worktree viability: {VIABLE|NOT VIABLE}
   Current branch: {branch} ({sha[:8]})
   Default branch: {default} ({default_sha[:8]})
   Delta: {N} commits ahead
-  Strategy: {worktree isolation | direct implementation (no worktree)}
+
+Options:
+  [A] Merge-forward: ff-merge {branch} → main, push, re-check viability (RECOMMENDED)
+  [B] Direct implementation: dispatch without worktree isolation (fallback)
+  [C] Abort
 ```
 
 ## Orchestrator Step A — PARSE + RISK SCORE
@@ -852,7 +878,8 @@ Auto-select based on task content and risk tier:
 | Two agents write same migration number | Assign migration numbers in Step C based on current schema version + task order. Tell each agent its number. |
 | Using opus when sonnet suffices | Default to sonnet for all agents. Reserve opus for complex architecture + security-critical review. |
 | Leaving main broken after partial merge | Use saga compensation — selective rollback of failing agent's patch. Never leave broken state. |
-| Using worktrees on feature branches | Worktrees create from DEFAULT branch, not current branch. Run viability check in Step 0. If not viable, dispatch WITHOUT `isolation: "worktree"`. |
+| Using worktrees on feature branches | Worktrees create from DEFAULT branch, not current branch. Run viability check in Step 0. If not viable, OFFER MERGE-FORWARD (ff-merge to main + push) as the recommended fix before falling back to no-isolation. |
+| Falling back to no-isolation when merge-forward was available | Merge-forward restores true parallel isolation — ask the user FIRST before degrading to sequential-for-overlaps mode. |
 | Worktree agent "only planned, didn't implement" | Base drift — agent landed on old code. Use agent's plan as instructions, implement directly on current branch. Do NOT re-dispatch with worktrees. |
 | Not recording dispatch outcomes | F6 learning loop improves future model routing and agent selection. |
 | Trusting agent's "complete" report | Agents drop sub-tasks silently. Grep for each planned item before committing — see Pre-commit Verification in Step E. |
