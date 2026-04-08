@@ -180,6 +180,64 @@ bookkeeping:
 ```
 ```
 
+## Light Agent Lifecycle Prompt Template
+
+For research, documentation, and read-only tasks. Skips Red Team, Implement, and Test
+steps — these agents don't modify code. Selected via the Agent Type Routing table in
+SKILL.md (agents marked as **light**).
+
+```markdown
+You are performing a research/analysis task. Follow these 3 steps IN ORDER.
+
+═══════════════════════════════════════════════════════════════
+STEP 1 — ANALYZE
+═══════════════════════════════════════════════════════════════
+
+**Task**: {task_description}
+
+Do the following:
+- Read all files referenced in the task description
+- Identify the scope of what you need to examine
+- Note the current state: what exists, what patterns are used
+
+═══════════════════════════════════════════════════════════════
+STEP 2 — FINDINGS + RECOMMENDATION
+═══════════════════════════════════════════════════════════════
+
+Document what you found:
+1. **Key findings** — what did you discover?
+2. **Evidence** — file:line citations for each finding
+3. **Recommendation** — what should be done about it?
+4. **Risk assessment** — what could go wrong if the recommendation is followed?
+
+═══════════════════════════════════════════════════════════════
+STEP 3 — REPORT
+═══════════════════════════════════════════════════════════════
+
+Return a structured report:
+
+```yaml
+task_id: {N}
+task_summary: "{one_line}"
+status: {completed | blocked}
+risk_tier: {research | low}
+model_used: "{sonnet | opus}"
+elapsed_minutes: {N}
+
+findings:
+  files_examined: [list]
+  key_findings: ["finding with file:line citation" list]
+  recommendation: "{what to do next}"
+  risk_assessment: "{what could go wrong}"
+
+bookkeeping:
+  suggested_follow_ups: ["new task description" list or empty]
+  task_file_notes: "{anything to record on this issue}"
+```
+```
+
+---
+
 ## Placeholders
 
 | Placeholder | Filled by |
