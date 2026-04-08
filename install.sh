@@ -13,7 +13,7 @@ SKILL_DST_DIR="$HOME/.claude/skills/parallel-task-dispatch"
 REFS_DST_DIR="$SKILL_DST_DIR/references"
 CMD_DST_DIR="$HOME/.claude/commands"
 
-REFS=(agent-prompt.md common-mistakes.md mcp-integration.md)
+REFS=(agent-prompt.md common-mistakes.md mcp-integration.md worktree-mode.md saga-rollback.md session-persistence.md)
 
 mkdir -p "$SKILL_DST_DIR" "$REFS_DST_DIR" "$CMD_DST_DIR"
 
