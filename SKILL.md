@@ -115,6 +115,10 @@ Agent(
 1. Only planned, didn't implement → implement directly using agent's plan
 2. `status: blocked` → check dependency
 3. Modified files outside ownership → caught at Step E
+4. Reported success but Step G full-suite failed → rewrite directly, do NOT re-dispatch
+
+**Fast-path for read-only tasks** (final verification, git-log summary, coverage report):
+The orchestrator runs these directly. A subagent adds overhead without isolation benefit since the task doesn't modify files.
 
 ### Agent Type Routing
 
@@ -146,11 +150,11 @@ Agent(
 3. Merges clean
 4. **Completeness check**: grep for each planned item — agents silently drop sub-tasks
 5. **Ownership check**: `git diff --name-only` vs expected files; revert unauthorized
-6. Full test suite passes
+6. **Behavioral check**: run the ACTUAL full test suite (not a slice). Agent-reported `tests.result` is advisory — agents often call their own scope "full suite"
 7. Worktree mode: commit + push + re-check viability
 8. Update DISPATCH_BASE_SHA
 
-### Completeness Check
+### Completeness Check (presence)
 
 Agents drop sub-tasks. For each plan item, grep for a unique token:
 - New function → grep function name
@@ -158,6 +162,24 @@ Agents drop sub-tasks. For each plan item, grep for a unique token:
 - New import → grep import line
 
 Zero matches = silently dropped. Implement directly.
+
+**Limitation:** Completeness grep proves presence, not correctness. A fix can be present in source but still not work under full-suite conditions. Must pair with behavioral check (#6 above).
+
+### Behavioral Check (correctness)
+
+Run the full test suite yourself, not the agent's slice:
+
+```bash
+# Auto-detect from project files
+pytest --timeout=30 -q      # .polybotenv/ or venv/ → prefix with venv python
+npm test                    # package.json
+cargo test                  # Cargo.toml
+go test ./...               # go.mod
+```
+
+Why this is mandatory: agents report `tests.result: {passed: N, failed: 0}` based on the tests they ran. If their scope was "my changed file" or "the directory I touched", that's not the full suite — it's the slice they could reach. Cross-file ordering flakes and cross-module integration failures only surface in the real full run.
+
+**If the full suite fails after agents report success:** you have a false-pass. Do NOT re-dispatch the same agent — rewrite directly in the orchestrator context where you have the failure details. See `references/common-mistakes.md` → "Recovery Patterns".
 
 ### Ownership Check
 
