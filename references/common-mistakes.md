@@ -1,37 +1,44 @@
 # Common Mistakes
 
-Sorted by observed frequency. Referenced from `SKILL.md`.
+Learned from real dispatches. Sorted by frequency.
 
 ## Observed
 
-| Mistake | Fix | Freq | Last |
-|---------|-----|------|------|
-| **Agent only plans, doesn't implement** | **#1 FAILURE MODE.** Custom instruction prompts cause agents to stop at Step 2. MUST embed the full lifecycle template from `agent-prompt.md` with placeholders filled. | 6x | Apr 9 |
-| **Agent reports "full suite passed" on a SLICE** | Agent runs tests in its narrow scope and calls it "full suite". Orchestrator MUST run the ACTUAL full suite at Step G, not trust the agent's `tests.result` field. | 1x | Apr 10 |
-| **Completeness grep passes while behavior fails** | Grep proves presence, not correctness. A setUp/tearDown can be present (grep ✓) while still not fixing the underlying isolation problem. Completeness check is necessary but not sufficient — Step G's full-suite run is the behavioral check. | 1x | Apr 10 |
-| Worktree agent "only planned, didn't implement" | Base drift — use agent's plan, implement directly. Do NOT re-dispatch with worktrees. | 4x | Apr 4 |
-| Agent re-adds migration/changes already on main | Include `ALREADY ON MAIN` block listing recent changes to owned files. | 3x | Apr 4 |
-| `cp` from worktree to main tree | NEVER `cp` — worktree is on old base. Use 3-way patch. | 2x | Apr 3 |
-| `git merge` on worktree branch | Agent edits are uncommitted. Merge shows "up to date". Use patch. | 2x | Apr 3 |
-| Trusting agent's "complete" report | Agents drop sub-tasks. Grep for each planned item before committing. | 1x | Apr 4 |
-| Orchestrator implements code | Orchestrator coordinates — agents implement (except fallback). | 1x | Apr 4 |
+| # | Mistake | Fix | Freq |
+|---|---------|-----|------|
+| 1 | **Agent only plans, doesn't implement** | #1 FAILURE MODE — now mitigated by implementation gate: (a) template self-check blocks plan-only reports, (b) `implementation_gate.code_written` in YAML catches it, (c) orchestrator auto re-dispatches once with override template, (d) override also fails → implement directly | 7x |
+| 2 | Worktree agent only planned | Base drift — use agent's plan, implement directly. Do NOT re-dispatch | 4x |
+| 3 | Agent re-adds changes already on main | Include `ALREADY ON MAIN` block listing recent changes to owned files | 3x |
+| 4 | `cp` from worktree to main | NEVER `cp` — worktree is on old base. Use 3-way patch | 2x |
+| 5 | `git merge` on worktree branch | Agents don't commit — edits are uncommitted. Merge shows "up to date". Use patch | 2x |
+| 6 | Using worktrees on feature branches | Worktrees create from DEFAULT branch. Use `file-ownership-parallel` or merge-forward | 2x |
+| 7 | Agent reports "full suite passed" on a SLICE | Orchestrator MUST run actual full suite at Step G — never trust agent's `tests.result` | 1x |
+| 8 | Completeness grep passes while behavior fails | Grep proves presence, not correctness. Must pair with full-suite behavioral check | 1x |
+| 9 | Dispatching agents for small scope (≤4 files) | Agent burns 60K+ tokens, never implements. Implement directly for well-specified tasks | 1x |
+| 10 | Trusting agent's "complete" report | Agents drop sub-tasks. Grep for each planned item before committing | 1x |
+| 11 | Orchestrator implements code | Orchestrator coordinates — agents implement (except fallback) | 1x |
 
 ## Recovery Patterns
 
-| Situation | Best action |
-|-----------|-------------|
-| Agent fix insufficient after Step G full-suite failure | Rewrite directly in orchestrator — you have full context of the failure mode. Re-dispatching forces the new agent to re-discover the bug. |
-| Read-only validation task (final test run, etc.) | Orchestrator runs directly. No subagent overhead. |
-| No pre-existing plan/task file | Create task file on-demand in `docs/superpowers/plans/YYYY-MM-DD-<name>.md` with the same structure. |
-| Agent's scope was too narrow | When dispatching, specify "run THIS command: `<full-suite-cmd>`" — not "verify in full suite". Agents interpret "full suite" as their own scope. |
+| Situation | Action |
+|-----------|--------|
+| Agent returns plan-only (no code) | Auto re-dispatch with override template (skips Steps 1-3, inlines plan). If override also plan-only → implement directly. Max 1 re-dispatch. |
+| Agent fails after 3 test attempts | Review attempt history in report. Fix directly in orchestrator context — you have the failure details. |
+| Agent fix insufficient after full-suite failure | Rewrite directly — you have full context. Re-dispatch forces re-discovery. |
+| Read-only validation task | Orchestrator runs directly. No subagent overhead. |
+| Small scope (≤4 files, plan has exact code) | Dispatch 1 Explore agent for analysis, implement directly using findings. |
+| No pre-existing task file | Create on-demand in `docs/superpowers/plans/`. |
+| Agent's scope too narrow | Specify exact test command — not "verify in full suite". |
 
 ## Theoretical (guard rails)
 
 | Mistake | Fix |
 |---------|-----|
-| Agent skips red team | Steps 1-6 mandatory in order |
+| Agent skips red team | Steps 1-6 mandatory, in order |
 | Agent fixes unrelated tests | Report pre-existing, don't fix |
-| Dispatching Batch 2 before Batch 1 merges | Sequential — merge then dispatch |
+| Agent silently reinterprets task | Report RED_TEAM_CONFLICT, let user decide |
+| Dispatching Batch 2 before merging Batch 1 | Sequential — merge then dispatch |
 | Pushing without approval | NEVER auto-push |
 | Two agents write same migration number | Pre-assign in Step C |
-| Multi-item prompt as prose | Number each sub-task; require per-item status |
+| Multi-item prompt as prose paragraph | Number each sub-task; require per-item status |
+| No-worktree agent runs full suite | Concurrent edits → false regressions. Orchestrator runs suite at G1 |

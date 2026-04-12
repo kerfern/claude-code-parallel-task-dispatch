@@ -85,40 +85,44 @@ Disjoint files → `file-ownership-parallel`. Overlap → `serial-batches`. Show
 
 ## Step D — DISPATCH
 
-**CRITICAL — AGENT PROMPT MUST USE LIFECYCLE TEMPLATE:**
-Do NOT write custom instruction prompts. Agents given instructions like "Add method X to file Y"
-will plan but NOT implement. You MUST embed the full 6-step lifecycle template from
-`references/agent-prompt.md` with placeholders filled in. This is the #1 cause of dispatch failure.
+**CRITICAL — USE LIFECYCLE TEMPLATE WITH IMPLEMENTATION GATE:**
+Do NOT write custom prompts. Agents given ad-hoc instructions only plan — they never implement.
+Embed the full lifecycle template from `references/agent-prompt.md` with placeholders filled.
+The template includes a self-enforcing implementation gate + test-iterate loop (3 attempts).
 
 All batch agents dispatched in ONE message:
 
 ```python
 Agent(
   description="Task N: {summary}",
-  prompt="""<paste full lifecycle template from references/agent-prompt.md
-             with {task_description}, {file_list}, {read_only_list},
-             {dependency_list_or_none}, {blocks_list_or_none} filled in>""",
-  model="sonnet",           # from Step C risk routing
+  prompt=FULL_LIFECYCLE_TEMPLATE,  # from references/agent-prompt.md, placeholders filled
+  model="sonnet",                  # from Step C risk routing
   run_in_background=True,
-  # isolation="worktree",   # ONLY in worktree-parallel mode
+  # isolation="worktree",          # ONLY in worktree-parallel mode
 )
 ```
 
 | Agent type | Prompt template |
 |-----------|----------------|
-| Implementation | **Full** lifecycle (steps 1-6) from `references/agent-prompt.md` |
-| Explore, doc-updater, research | **Light** lifecycle (steps 1-2+6) |
+| Implementation | **Full** lifecycle (steps 1-6) — includes implementation gate + 3-attempt test loop |
+| Explore, doc-updater, research | **Light** lifecycle (steps 1-2+report) |
 
 **After dispatch: STOP. Wait for all agents.**
 
-**When agent returns:**
-1. Only planned, didn't implement → implement directly using agent's plan
-2. `status: blocked` → check dependency
-3. Modified files outside ownership → caught at Step E
-4. Reported success but Step G full-suite failed → rewrite directly, do NOT re-dispatch
+**When agent returns — implementation gate check:**
+
+| Report says | Action |
+|-------------|--------|
+| `code_written: false` or no `files_modified` | **Re-dispatch once** with override template (see `references/agent-prompt.md`). Skips Steps 1-3, inlines plan, demands code. |
+| Override also plan-only | Implement directly using the plan. Max 1 re-dispatch. |
+| `status: failed` (test attempts exhausted) | Review failure report + attempt history. Fix directly or defer. |
+| `status: blocked` | Check dependency, unblock or defer. |
+| `status: completed` | Proceed to Step E. |
+| Files outside ownership | Caught at Step E ownership check. |
+| Success but Step G suite fails | Rewrite directly — do NOT re-dispatch. |
 
 **Fast-path for read-only tasks** (final verification, git-log summary, coverage report):
-The orchestrator runs these directly. A subagent adds overhead without isolation benefit since the task doesn't modify files.
+The orchestrator runs these directly. No subagent overhead.
 
 ### Agent Type Routing
 
@@ -205,8 +209,8 @@ Update task file: completed/failed/blocked statuses, new tests, follow-ups. Add 
 ## Common Mistakes
 
 See `references/common-mistakes.md`. Top reminders:
-- **Agents given custom prompts only plan — use the lifecycle template**
-- Orchestrator NEVER implements (except when agent fails to)
+- **#1 failure: plan-only agents** — mitigated by implementation gate + auto re-dispatch (1 retry)
+- Orchestrator NEVER implements (except fallback after re-dispatch also fails)
 - NEVER auto-push
 - Agents drop sub-tasks — grep before committing
 - Default `file-ownership-parallel`; worktrees opt-in
@@ -216,7 +220,7 @@ See `references/common-mistakes.md`. Top reminders:
 
 | File | Contents |
 |------|----------|
-| `references/agent-prompt.md` | Full + light lifecycle templates with YAML report |
+| `references/agent-prompt.md` | Full + light + override templates, implementation gate, YAML report |
 | `references/common-mistakes.md` | Observed + theoretical failure patterns |
 | `references/worktree-mode.md` | Viability, merge-forward, 3-way patch, Serial-Before-Parallel |
 | `references/saga-rollback.md` | Selective rollback, hypothesis-driven failure analysis |

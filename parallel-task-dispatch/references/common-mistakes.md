@@ -6,7 +6,7 @@ Learned from real dispatches. Sorted by frequency.
 
 | # | Mistake | Fix | Freq |
 |---|---------|-----|------|
-| 1 | **Agent only plans, doesn't implement** | #1 FAILURE MODE. Agents exhaust context on analysis. Mitigate: (a) use lifecycle template, (b) for ≤4-file tasks skip agents and implement directly | 7x |
+| 1 | **Agent only plans, doesn't implement** | #1 FAILURE MODE — now mitigated by implementation gate: (a) template self-check blocks plan-only reports, (b) `implementation_gate.code_written` in YAML catches it, (c) orchestrator auto re-dispatches once with override template, (d) override also fails → implement directly | 7x |
 | 2 | Worktree agent only planned | Base drift — use agent's plan, implement directly. Do NOT re-dispatch | 4x |
 | 3 | Agent re-adds changes already on main | Include `ALREADY ON MAIN` block listing recent changes to owned files | 3x |
 | 4 | `cp` from worktree to main | NEVER `cp` — worktree is on old base. Use 3-way patch | 2x |
@@ -22,11 +22,13 @@ Learned from real dispatches. Sorted by frequency.
 
 | Situation | Action |
 |-----------|--------|
-| Agent fix insufficient after full-suite failure | Rewrite directly — you have full context. Re-dispatch forces re-discovery | |
-| Read-only validation task | Orchestrator runs directly. No subagent overhead |
-| Small scope (≤4 files, plan has exact code) | Dispatch 1 Explore agent for analysis, implement directly using findings |
-| No pre-existing task file | Create on-demand in `docs/superpowers/plans/` |
-| Agent's scope too narrow | Specify exact test command — not "verify in full suite" |
+| Agent returns plan-only (no code) | Auto re-dispatch with override template (skips Steps 1-3, inlines plan). If override also plan-only → implement directly. Max 1 re-dispatch. |
+| Agent fails after 3 test attempts | Review attempt history in report. Fix directly in orchestrator context — you have the failure details. |
+| Agent fix insufficient after full-suite failure | Rewrite directly — you have full context. Re-dispatch forces re-discovery. |
+| Read-only validation task | Orchestrator runs directly. No subagent overhead. |
+| Small scope (≤4 files, plan has exact code) | Dispatch 1 Explore agent for analysis, implement directly using findings. |
+| No pre-existing task file | Create on-demand in `docs/superpowers/plans/`. |
+| Agent's scope too narrow | Specify exact test command — not "verify in full suite". |
 
 ## Theoretical (guard rails)
 

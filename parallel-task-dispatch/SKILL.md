@@ -105,29 +105,35 @@ Show mode. User may override to `worktree-parallel` (requires `--worktree` + via
 
 ## Step D — DISPATCH
 
-All batch agents dispatched in ONE message. Each gets its lifecycle template from `references/agent-prompt.md` with placeholders filled:
+All batch agents dispatched in ONE message. Each gets its lifecycle template from `references/agent-prompt.md` with placeholders filled. The template includes a self-enforcing implementation gate and 3-attempt test-iterate loop.
 
 ```python
 Agent(
   description="Task N: {summary}",
-  prompt=LIFECYCLE_TEMPLATE,          # full or light per agent type routing
-  model="sonnet",                     # from Step C risk routing
+  prompt=FULL_LIFECYCLE_TEMPLATE,      # from references/agent-prompt.md, placeholders filled
+  model="sonnet",                      # from Step C risk routing
   run_in_background=True,
-  # isolation="worktree",             # ONLY in worktree-parallel mode
+  # isolation="worktree",              # ONLY in worktree-parallel mode
 )
 ```
 
 **Fast-path — skip agents when:**
 - Read-only tasks (verification, git-log, coverage report) → orchestrator runs directly
-- Small scope (≤4 files) with detailed plan → orchestrator implements directly. Agents burn 60K+ tokens on analysis and fail to implement 50%+ of the time (`references/common-mistakes.md` #1)
+- Small scope (≤4 files) with detailed plan → orchestrator implements directly
 
 **After dispatch: STOP. Wait for all agents.**
 
-**When agent returns:**
-1. Only planned, didn't implement → implement directly using agent's plan
-2. `status: blocked` → check dependency
-3. Modified files outside ownership → caught at Step E
-4. Reported success but full-suite fails → rewrite directly, do NOT re-dispatch
+**When agent returns — implementation gate check:**
+
+| Report says | Action |
+|-------------|--------|
+| `code_written: false` or no `files_modified` | **Re-dispatch once** with override template (`references/agent-prompt.md`). Skips Steps 1-3, inlines plan, demands code. |
+| Override also plan-only | Implement directly using the plan. Max 1 re-dispatch. |
+| `status: failed` (test attempts exhausted) | Review failure report + attempt history. Fix directly or defer. |
+| `status: blocked` | Check dependency, unblock or defer. |
+| `status: completed` | Proceed to Step E. |
+| Files outside ownership | Caught at Step E ownership check. |
+| Success but Step G suite fails | Rewrite directly — do NOT re-dispatch. |
 
 ## Step D½ — MONITOR (optional)
 
@@ -210,8 +216,8 @@ User gates: 0 (commit/push), C (plan), C½ (mode), G (commit/push).
 ## Common Mistakes
 
 See `references/common-mistakes.md`. Top reminders:
-- **#1 failure: agents given custom prompts only plan — use the lifecycle template**
-- Orchestrator NEVER implements (except fallback when agent fails to)
+- **#1 failure: plan-only agents** — mitigated by implementation gate + auto re-dispatch (1 retry)
+- Orchestrator NEVER implements (except fallback after re-dispatch also fails)
 - NEVER auto-push — ask user first
 - Agents drop sub-tasks silently — grep before committing
 - Default `file-ownership-parallel`; worktrees opt-in via `--worktree`
@@ -221,7 +227,7 @@ See `references/common-mistakes.md`. Top reminders:
 
 | File | Contents |
 |------|----------|
-| `references/agent-prompt.md` | Full + light lifecycle templates, YAML report schema |
+| `references/agent-prompt.md` | Full + light + override templates, implementation gate, YAML report |
 | `references/common-mistakes.md` | Observed + theoretical failure patterns |
 | `references/worktree-mode.md` | Viability check, 3-way patch, Serial-Before-Parallel |
 | `references/saga-rollback.md` | Selective rollback, hypothesis-driven failure analysis |

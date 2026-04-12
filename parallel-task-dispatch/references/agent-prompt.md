@@ -1,105 +1,123 @@
-# Agent Lifecycle Templates
+# Agent Lifecycle Prompt Templates
 
-Orchestrator fills `{placeholders}` at dispatch time. Paste the full template into the agent prompt — custom instructions cause agents to only plan and not implement.
+Orchestrator fills `{placeholders}` at dispatch. **Paste the full template — custom prompts cause agents to only plan.**
 
 ## Full Lifecycle (implementation tasks)
 
 ```markdown
-You are implementing a task. Follow ALL 6 steps IN ORDER. You MUST reach Step 4 (Implement) and Step 5 (Test). Do NOT stop after planning.
+You are implementing a task. Follow ALL 6 steps IN ORDER.
+
+⚠️  IMPLEMENTATION GATE
+You MUST call Edit/Write in Step 4 and run tests in Step 5.
+A report with zero files modified is a FAILURE — go back to Step 4.
 
 STEP 1 — ANALYZE
 **Task**: {task_description}
 **Depends on**: {dependency_list_or_none}
 **Blocks**: {blocks_list_or_none}
-- Read all referenced files
-- Verify dependencies exist (Glob/Grep). Missing → status: blocked
-- Identify what needs changing and current state
+- Read referenced files, verify dependencies (Glob/Grep). Missing → status: blocked
+- ⏱ Spend ≤20% of effort on Steps 1-3. Implementation is the deliverable.
 
 STEP 2 — PLAN
-1. Files to modify + specific changes per file
+1. Files to modify + specific changes
 2. Order of operations
-3. Verification approach (tests to run)
-4. Edge cases
+3. Test command to verify
 
-STEP 3 — RED TEAM
-- Do files/functions actually exist at described paths?
-- Will changes break anything outside owned files?
-- Hidden dependencies (other code importing what you change)?
-- Matches project conventions?
-- Factual errors in task → report in Step 6, do NOT silently reinterpret
+STEP 3 — RED TEAM (brief)
+- Paths/functions exist? Breaking changes outside owned files?
+- Factual errors → RED_TEAM_CONFLICT, do NOT reinterpret
 
-STEP 4 — IMPLEMENT
-**Owned Files** (modify ONLY these): {file_list}
-**Read-Only Files**: {read_only_list}
-- Modify ONLY owned files
-- Follow existing code patterns
-- Need read-only file changes → describe in report
+STEP 4 — IMPLEMENT ← mandatory
+**Owned files** (modify ONLY these): {file_list}
+**Read-only files**: {read_only_list}
+- Call Edit or Write on owned files. This step is not optional.
+- Follow existing patterns. Need read-only changes → note in report.
 
-STEP 5 — TEST (eval-first gate)
-5a. Run relevant tests BEFORE changes (baseline)
-5b. Run same tests AFTER changes
-5c. New regressions > 0 → fix. Unfixable → status: failed
+STEP 5 — TEST + ITERATE (max 3 attempts)
 Auto-detect: `.polybotenv/`→pytest, `package.json`→npm test, `Cargo.toml`→cargo test, `go.mod`→go test
 
+  attempt 1: run tests → pass? done. fail? diagnose + fix ↓
+  attempt 2: run tests → pass? done. fail? diagnose + fix ↓
+  attempt 3: run tests → pass? done. fail? → status: failed
+
+Record per attempt: failures, fix applied, result.
+
 STEP 6 — REPORT
+Self-check before reporting: did you call Edit/Write in Step 4?
+If not → STOP, go back to Step 4. Do not file a plan-only report.
+
 ```yaml
 task_id: {N}
 task_summary: "{one_line}"
-status: completed | failed | blocked | conflict
-risk_tier: critical | high | standard | low
-model_used: "{model}"
+status: completed | failed | blocked
 
-analysis:
-  dependencies_verified: true | false | "missing: X"
-  files_examined: [list]
+implementation_gate:
+  code_written: true | false
+  files_modified_count: N
+  test_attempts: N
+  final_pass: true | false
 
 plan:
   files_and_changes: ["file: change"]
-  order: [file list]
-  verification: "{how}"
-  edge_cases: ["case"]
 
 red_team:
   all_facts_verified: true | false
   conflicts: ["RED_TEAM_CONFLICT: ..."]
-  corrections_made: ["desc"]
-  hidden_dependencies_found: ["desc"]
-  regression_risk: none | low | medium | high
 
 implementation:
   files_modified: ["path (+N/-N)"]
-  files_created: ["path"]
   approach: "{brief}"
 
 tests:
-  command: "{what ran}"
-  baseline: {passed: N, failed: N}
-  result: {passed: N, failed: N}
-  new_regressions: N
-  new_tests_added: ["name: coverage"]
-  pre_existing_failures: ["test_name"]
+  command: "{cmd}"
+  attempts:
+    - {n: 1, passed: N, failed: N, fix: "null | desc"}
+  final: {passed: N, failed: N, regressions: N}
 
 bookkeeping:
   suggested_follow_ups: ["desc"]
-  cross_task_needs:
-    - {task_id: N, need: "what", blocking: true|false}
-  task_file_notes: "{notes}"
 ```
 ```
+
+## Override Template (re-dispatch for plan-only return)
+
+When an agent returns without implementing (`code_written: false` or no `files_modified`),
+re-dispatch ONCE with this compressed template:
+
+```markdown
+IMPLEMENTATION OVERRIDE — A prior agent analyzed this task but wrote NO code.
+You must implement now. Analysis is done — skip to Step 4.
+
+PRIOR PLAN:
+{paste_agent_plan_yaml}
+
+STEP 4 — IMPLEMENT
+**Owned files**: {file_list}
+**Read-only files**: {read_only_list}
+Write the code. Edit/Write calls required. No further analysis.
+
+STEP 5 — TEST + ITERATE (max 3 attempts)
+  attempt 1: run tests → pass? done. fail? fix ↓
+  attempt 2: run tests → pass? done. fail? fix ↓
+  attempt 3: run tests → pass? done. fail? → status: failed
+
+STEP 6 — REPORT (same YAML schema as full lifecycle)
+```
+
+Override also returns plan-only → orchestrator implements directly. Max 1 re-dispatch.
 
 ## Light Lifecycle (research/docs — no code changes)
 
 ```markdown
-You are performing a research/analysis task. Follow these 3 steps.
+You are performing a research/analysis task. 3 steps.
 
 STEP 1 — ANALYZE
 **Task**: {task_description}
-- Read referenced files, identify scope, note current state
+- Read referenced files, identify scope
 
 STEP 2 — FINDINGS
 1. Key findings with file:line citations
-2. Recommendation
-3. Risk assessment
+2. Recommendation + risk assessment
 
 STEP 3 — REPORT
 ```yaml
@@ -110,7 +128,6 @@ findings:
   files_examined: [list]
   key_findings: ["finding with citation"]
   recommendation: "{action}"
-  risk_assessment: "{risk}"
 bookkeeping:
   suggested_follow_ups: ["desc"]
 ```
@@ -125,3 +142,4 @@ bookkeeping:
 | `{blocks_list_or_none}` | Step B |
 | `{file_list}` | Step C |
 | `{read_only_list}` | Step C |
+| `{paste_agent_plan_yaml}` | Prior agent's plan YAML (override only) |
