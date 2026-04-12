@@ -5,16 +5,14 @@ description: Update the parallel-task-dispatch skill and this command from its G
 # /update-parallel-task-dispatch
 
 Pulls the latest `parallel-task-dispatch` skill (SKILL.md + references/) and this command file
-from https://github.com/kerfern/claude-code-parallel-task-dispatch and installs them into
-`~/.claude/skills/parallel-task-dispatch/` and `~/.claude/commands/`.
+from https://github.com/kerfern/claude-code-parallel-task-dispatch.
 
 ## Workflow
 
-1. Fetch latest `SKILL.md`, all `references/*.md`, and the command file from the `main` branch.
-2. Diff against local copies; show a summary (total changed lines across all files).
-3. If nothing changed → report "already up to date" and exit.
-4. If changed → ask the user to confirm, then write the new files over the local copies.
-5. Report which files were updated and the new SHA/commit date if available.
+1. Fetch latest files from `main` branch into a temp dir.
+2. Diff against local copies; show changed line counts.
+3. Nothing changed → report "already up to date" and exit.
+4. Changed → ask user to confirm, then overwrite locals.
 
 ## Implementation
 
@@ -48,10 +46,10 @@ echo "$REFS" | while IFS= read -r ref; do
   curl -fsSL "${RAW}/parallel-task-dispatch/references/${ref}" -o "$TMP/references/${ref}" || { echo "FAIL: fetch references/${ref}"; exit 1; }
 done
 
-# Latest commit info (best-effort)
+# Latest commit info
 LATEST=$(curl -fsSL "$API" 2>/dev/null | grep -E '"(sha|date)"' | head -2)
 
-# Diff summary (grep -c always prints a number; `|| true` suppresses its exit code)
+# Diff summary
 SKILL_DIFF=$(diff -u "$SKILL_DST" "$TMP/SKILL.md" 2>/dev/null | grep -c '^[+-]' || true)
 CMD_DIFF=$(diff -u "$CMD_DST"    "$TMP/update-parallel-task-dispatch.md" 2>/dev/null | grep -c '^[+-]' || true)
 REFS_DIFF=0
@@ -93,32 +91,5 @@ echo "Updated: $CMD_DST"
 echo "Updated: $REFS_DST/ ($REFS_COUNT files)"
 ```
 
-## Repo layout expected
-
-```
-claude-code-parallel-task-dispatch/
-├── README.md
-├── install.sh
-├── parallel-task-dispatch/
-│   ├── SKILL.md
-│   └── references/
-│       ├── agent-prompt.md
-│       ├── common-mistakes.md
-│       ├── mcp-integration.md
-│       ├── worktree-mode.md
-│       ├── saga-rollback.md
-│       └── session-persistence.md
-└── commands/
-    └── update-parallel-task-dispatch.md
-```
-
-If the repo adds, renames, or removes reference files, update the `REFS` array above.
-The command hardcodes reference filenames for simplicity; after one successful update,
-users pick up any new reference list automatically (the command file itself is synced).
-
-## Safety
-
-- Never auto-writes without showing diff + asking for confirmation.
-- Uses `curl -fsSL` so HTTP errors surface instead of writing empty files.
-- Fetches into a temp dir first; only overwrites on explicit confirmation.
-- Creates `references/` directory if it doesn't exist (for upgrades from pre-references versions).
+If the repo adds or renames reference files, update the `REFS` array above.
+The command file itself is synced, so after one update users get the new list automatically.
